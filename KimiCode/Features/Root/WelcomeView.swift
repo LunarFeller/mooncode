@@ -13,6 +13,8 @@ struct WelcomeView: View {
     /// 文字已经全部打出来的那一步；登录页没有逐字动画。
     @State private var typedStep: Step?
     @State private var splash = Splash.cover
+    /// 启动画面是系统默认的白底：开场先从白快速渐变成整屏蓝，再出眼睛。
+    @State private var blueShown = false
     @State private var eyesShown = false
     @State private var blinking = false
     @State private var landed = false
@@ -22,7 +24,7 @@ struct WelcomeView: View {
     /// 页面上 bot 的位置（全局坐标），开场的大脸收缩到这里。
     @State private var faceFrame = CGRect.zero
 
-    private let welcome = "欢迎来到MoonCode！"
+    private let welcome = "欢迎来到Moon Code！"
     private let tagline = "KimiCode的远程控制客户端"
     private let instruction = "请你在任意终端运行"
     private let command = "kimi rc"
@@ -88,7 +90,7 @@ struct WelcomeView: View {
                         .accessibilityLabel("\(instruction)\n\(command)")
                         .transition(.opacity)
                     case .login:
-                        (Text("Moon").foregroundStyle(Palette.kimi) + Text("Code"))
+                        (Text("Moon").foregroundStyle(Palette.kimi) + Text(" Code"))
                             .font(.system(size: 40, weight: .black))
                             .transition(.opacity)
                     }
@@ -189,6 +191,7 @@ struct WelcomeView: View {
                         eyesShown: eyesShown,
                         blinking: blinking
                     )
+                    .opacity(blueShown ? 1 : 0)
                 }
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
@@ -218,7 +221,7 @@ struct WelcomeView: View {
             while revealedCharacters < total {
                 do { try await Task.sleep(for: .milliseconds(55)) } catch { return }
                 revealedCharacters += 1
-                // 「欢迎来到MoonCode！」打完：喷彩条，停一下再打第二行
+                // 「欢迎来到Moon Code！」打完：喷彩条，停一下再打第二行
                 if step == .intro && revealedCharacters == welcome.count {
                     await celebrate()
                 }
@@ -235,11 +238,12 @@ struct WelcomeView: View {
         }
     }
 
-    /// 开场：整屏蓝（bot 的脸）→ 眼睛弹出、眨一下 → 收缩成页面上的 bot（不回弹，落定时震一下）→ 开始打字。
+    /// 开场：白底快速渐变成整屏蓝（bot 的脸）→ 眼睛弹出、眨一下 → 收缩成页面上的 bot（不回弹，落定时震一下）→ 开始打字。
     private func playSplash() async {
         defer { model.hasPlayedSplash = true }
         do {
-            try await Task.sleep(for: .milliseconds(200))
+            withAnimation(.easeOut(duration: 0.25)) { blueShown = true }
+            try await Task.sleep(for: .milliseconds(300))
             withAnimation(.spring(response: 0.32, dampingFraction: 0.55)) { eyesShown = true }
             try await Task.sleep(for: .milliseconds(450))
             withAnimation(.easeIn(duration: 0.07)) { blinking = true }

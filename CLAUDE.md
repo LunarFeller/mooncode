@@ -1,6 +1,6 @@
 # MoonCode（GitHub: qkunio/mooncode）
 
-主屏显示名 `MoonCode`，App Store 名「MoonCode - KimiCode远程控制客户端」。App 已在 App Store Connect 建好，
+主屏显示名 `Moon Code`（App 内字标同样带空格），App Store 名「MoonCode - KimiCode远程控制客户端」。App 已在 App Store Connect 建好，
 **Bundle ID `com.qinkun.kimicode` 不能改**；Keychain service / 日志 subsystem / 工程与 target 名沿用 KimiCode。
 界面里的「Kimi Code」只用来指电脑上的 CLI（如确认卡片「允许 Kimi Code 写入…」），不是本 App 的名字。
 
@@ -15,9 +15,9 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 
 ### 启动与登录流程（产品定稿）
 
-0. 开场动效（每次启动只放一次，减弱动态效果时跳过）：启动画面是 Kimi 蓝（`Config/Info.plist` 的 `UILaunchScreen.UIColorName = AccentColor`），
-   接上整屏蓝的「大脸」→ 眼睛弹出、眨一下 → 平滑收缩成页面上的 bot（不回弹，落定时轻震）→ 开始打字。实现在 `WelcomeView` 的 `SplashFace`。
-1. 启动页分两屏逐字出现（每个字轻震一下），打完才出按钮：「欢迎来到MoonCode！」（Moon 蓝色；「！」出来后一拍从两个下角喷彩条 `ConfettiBurst`，停约 1s）+「KimiCode的远程控制客户端」（两行同样式）→「下一步」；
+0. 开场动效（每次启动只放一次，减弱动态效果时跳过）：启动画面是系统默认白底，进欢迎流程时
+   0.25s 渐变成整屏蓝的「大脸」→ 眼睛弹出、眨一下 → 平滑收缩成页面上的 bot（不回弹，落定时轻震）→ 开始打字。实现在 `WelcomeView` 的 `SplashFace`。
+1. 启动页分两屏逐字出现（每个字轻震一下），打完才出按钮：「欢迎来到Moon Code！」（Moon 蓝色；「！」出来后一拍从两个下角喷彩条 `ConfettiBurst`，停约 1s）+「KimiCode的远程控制客户端」（两行同样式）→「下一步」；
    「请你在任意终端运行」+ `kimi rc` →「我已完成」。
 2. 点「我已完成」：换成「MoonCode」字标 + 大号「登录 Kimi 账号」按钮；字标与登录按钮之间出现灰字
    「支持 GO 及以上订阅」。**同时后台预取 device-code 授权**，不展示给用户。

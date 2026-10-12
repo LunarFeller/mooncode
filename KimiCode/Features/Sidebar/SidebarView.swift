@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 侧栏：
-///   MoonCode
+///   Moon Code
 ///   📁+ 添加文件夹
 ///   📁 Folder1                        (+)
 ///        Session1
@@ -81,7 +81,7 @@ struct SidebarView: View {
             KimiFace(animating: false)
                 .scaleEffect(1.25)
                 .frame(width: 30, height: 20)
-            (Text("Moon").foregroundStyle(Palette.kimi) + Text("Code"))
+            (Text("Moon").foregroundStyle(Palette.kimi) + Text(" Code"))
                 .font(.system(.title2, weight: .black))
         }
         .frame(height: 44)
