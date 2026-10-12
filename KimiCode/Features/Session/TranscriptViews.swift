@@ -101,7 +101,10 @@ struct ConversationList: View {
 
     /// `g`：本轮在跑时，最后一条若是助手消息，它就是「活的」那条。
     private func liveEntryID(_ entries: [ChatEntry]) -> String? {
-        guard chat.isWorking, case let .assistant(entry)? = entries.last?.kind else { return nil }
+        // 刚发出的消息还没进正文时，最后一条助手消息是上一轮的：不能把它当成活的展开，
+        // 否则看起来像新回答里混进了上一条的回答。
+        guard chat.isWorking, chat.optimisticPrompts.isEmpty,
+              case let .assistant(entry)? = entries.last?.kind else { return nil }
         return entry.id
     }
 
@@ -146,7 +149,8 @@ struct ConversationList: View {
         if let retry = chat.retry {
             return "模型请求失败，正在重试（第 \(retry.next)/\(retry.max) 次）…"
         }
-        if case let .assistant(entry)? = entries.last?.kind, entry.hasContent {
+        // 刚发出的消息还没进正文时，entries 的最后一条是上一轮的回复，不能拿它判断「已经在干活」。
+        if chat.optimisticPrompts.isEmpty, case let .assistant(entry)? = entries.last?.kind, entry.hasContent {
             return "工作中…"
         }
         return "请求中…"
@@ -627,7 +631,7 @@ struct ThinkingBlockView: View {
                 withAnimation(.snappy(duration: 0.25)) { ui.set(key, !open) }
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "lightbulb.max")
+                    Image(systemName: "lightbulb")
                         .font(.footnote)
                         .frame(width: 20)
                     Text(streaming ? "思考中…" : "思考过程")

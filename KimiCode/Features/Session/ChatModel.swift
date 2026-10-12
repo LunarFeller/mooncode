@@ -39,6 +39,9 @@ final class ChatModel {
     private(set) var isLoading = false
     private(set) var isLoadingOlder = false
     private(set) var isSending = false
+    /// `POST /prompts` 已经返回、但正文里这一轮还没开始跑：接住这段空档，「请求中…」不中途消失。
+    private var awaitingTurn = false
+    private var awaitingTurnTimeout: Task<Void, Never>?
     private(set) var connectionState: ConnectionState = .idle
     var errorMessage: String?
     /// 撤销后放回输入框的原文（官方：「已撤销，原文已放回输入框」）。
@@ -120,7 +123,7 @@ final class ChatModel {
     // MARK: 运行态（全部从 transcript 派生）
 
     /// 本轮在跑（`meta.activity == "turn"`），或刚发出去还没回显。
-    var isWorking: Bool { transcript.isTurnActive || isSending }
+    var isWorking: Bool { transcript.isTurnActive || isSending || awaitingTurn }
 
     /// composer 用：忙时只给「停止」。
     var isBusy: Bool { isWorking }
@@ -210,7 +213,9 @@ final class ChatModel {
     /// 全量重拉：正文尾部一页 + 待处理的确认/提问 + composer 状态。
     func reload() async {
         guard let sessionID else { return }
-        isLoading = entries.isEmpty
+        // 只在屏幕上什么都没有时转圈（打开已有会话的首屏）。草稿发出第一条后建会话再重拉，
+        // 那条消息已经乐观显示着，不该在它上面再冒一个圈。
+        isLoading = entries.isEmpty && optimisticPrompts.isEmpty
         defer { isLoading = false }
         do {
             async let page = client.transcript(sessionID)
@@ -305,6 +310,23 @@ final class ChatModel {
             return nil
         })
         optimisticPrompts.removeAll { !$0.failed && known.contains($0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        // 这一轮已经跑起来了，或者跑得太快、回复已经落进正文（体验模式轮询时会这样）：空档结束。
+        if awaitingTurn, transcript.isTurnActive || (optimisticPrompts.isEmpty && entries.last?.isAssistant == true) {
+            setAwaitingTurn(false)
+        }
+    }
+
+    /// 兜底 15s：服务端迟迟不报这一轮开始（排队、断线）时不让「请求中…」一直挂着。
+    private func setAwaitingTurn(_ value: Bool) {
+        awaitingTurn = value
+        awaitingTurnTimeout?.cancel()
+        awaitingTurnTimeout = nil
+        guard value else { return }
+        awaitingTurnTimeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            self?.awaitingTurn = false
+        }
     }
 
     /// 侧栏改了名：换上服务端回来的会话摘要（导航栏标题跟着变）。
@@ -394,6 +416,7 @@ final class ChatModel {
                 to: sessionID
             )
             holdsLocalConfig = false
+            setAwaitingTurn(true)
             scheduleOfflineReload()
         } catch {
             errorMessage = error.localizedDescription
@@ -419,6 +442,7 @@ final class ChatModel {
 
     func abort() async {
         guard let sessionID else { return }
+        setAwaitingTurn(false)
         do {
             try await client.abort(sessionID)
         } catch {

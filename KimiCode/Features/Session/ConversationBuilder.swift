@@ -16,6 +16,11 @@ struct ChatEntry: Identifiable, Sendable {
 
     let id: String
     let kind: Kind
+
+    var isAssistant: Bool {
+        if case .assistant = kind { return true }
+        return false
+    }
 }
 
 struct UserEntry: Sendable {
