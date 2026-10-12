@@ -1,4 +1,8 @@
-# kimicode-mobile
+# kimicode-mobile（产品名 MoonCode）
+
+主屏显示名 `MoonCode`，App Store 名「MoonCode - KimiCode远程控制客户端」。App 已在 App Store Connect 建好，
+**Bundle ID `com.qinkun.kimicode` 不能改**；Keychain service / 日志 subsystem / 工程与 target 名沿用 KimiCode。
+界面里的「Kimi Code」只用来指电脑上的 CLI（如确认卡片「允许 Kimi Code 写入…」），不是本 App 的名字。
 
 iOS 26 原生客户端，目标是把 `kimi rc`（Kimi Code Remote Control）生成的网页端能力完整搬到 App：
 用户**用 Kimi 账号登录**后，从账号下的设备列表里选一台跑着 `kimi rc` 的电脑接入，在 App 内完成网页端能做的一切
@@ -11,8 +15,11 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 
 ### 启动与登录流程（产品定稿）
 
-1. 启动页：屏幕中间大字「KIMI CODE」，正下方一个「开始使用」按钮。
-2. 点「开始使用」：按钮滑到底部变成大号「登录」按钮；「KIMI CODE」与登录按钮之间出现灰字
+0. 开场动效（每次启动只放一次，减弱动态效果时跳过）：启动画面是 Kimi 蓝（`Config/Info.plist` 的 `UILaunchScreen.UIColorName = AccentColor`），
+   接上整屏蓝的「大脸」→ 眼睛弹出、眨一下 → 平滑收缩成页面上的 bot（不回弹，落定时轻震）→ 开始打字。实现在 `WelcomeView` 的 `SplashFace`。
+1. 启动页分两屏逐字出现（每个字轻震一下），打完才出按钮：「欢迎来到MoonCode！」（Moon 蓝色；「！」出来后一拍从两个下角喷彩条 `ConfettiBurst`，停约 1s）+「KimiCode的远程控制客户端」（两行同样式）→「下一步」；
+   「请你在任意终端运行」+ `kimi rc` →「我已完成」。
+2. 点「我已完成」：换成「MoonCode」字标 + 大号「登录 Kimi 账号」按钮；字标与登录按钮之间出现灰字
    「支持 GO 及以上订阅」。**同时后台预取 device-code 授权**，不展示给用户。
 3. 点「登录」：用系统浏览器（`ASWebAuthenticationSession`）打开确认页 `verification_uri_complete`
    （链接自带 user code）。**界面上不出现验证码、倒计时之类的东西。**
@@ -31,7 +38,7 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 ```
 主页                                   侧栏（从左推入，主页被推到右边露出一截）
 ┌──────────────────────────┐           ┌──────────────────────┬──┐
-│ (≡)         会话标题       │           │ KIMI CODE            │  │
+│ (≡)         会话标题       │           │ MoonCode             │  │
 │                          │           │ 设备 (MAC ▾)          │  │ ← 切设备
 │        对话正文            │           │ 📁 Folder1        (+) │  │ ← + 在该文件夹新建会话
 │                          │           │   ○ Session1          │  │
@@ -260,7 +267,7 @@ WS_PROTOCOL_VERSION = 2, heartbeat ≈ 30s
 
 ```
 App
-├─ Welcome         KIMI CODE → 开始使用 → 登录（§5）
+├─ Welcome         欢迎 → 下一步 → kimi rc → 我已完成 → 登录（§5）
 ├─ Devices         账号下的设备列表
 ├─ KapClient       REST（URLSession + Codable，Envelope 解包）
 │                  WS（URLSessionWebSocketTask + cursor 续传）

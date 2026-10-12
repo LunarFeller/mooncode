@@ -1,6 +1,6 @@
-# KIMI CODE for iOS
+# MoonCode
 
-在手机上接管电脑里的 Kimi Code。
+KimiCode 的远程控制客户端：在手机上接管电脑里的 Kimi Code。
 
 电脑上跑一条 `kimi rc`，手机上用同一个 Kimi 账号登录，就能从 App 里给电脑上的
 Kimi Code 派活：发任务、看它一边思考一边干活、批准或拒绝它要执行的命令、随时叫停。
@@ -64,8 +64,8 @@ xcodebuild -project KimiCode.xcodeproj -scheme KimiCode -sdk iphonesimulator \
 
 ## 第一次使用
 
-1. 打开 App，点「**开始使用**」，再点「**登录**」。
-2. 系统会弹一句「"KimiCode"想要使用"kimi.com"登录」—— 这是 iOS 的标准提示，点继续。
+1. 打开 App 点「**下一步**」，按提示在电脑终端运行 `kimi rc`，点「**我已完成**」，再点「**登录 Kimi 账号**」。
+2. 系统会弹一句「"MoonCode"想要使用"kimi.com"登录」—— 这是 iOS 的标准提示，点继续。
 3. 浏览器里出现 Kimi 的确认页，点确认授权。
 4. 浏览器自动收起，直接进入主界面。
 

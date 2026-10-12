@@ -30,6 +30,9 @@ final class AppModel {
     /// 体验模式（App Store 审核用）：不登录、不连任何设备，数据全来自本地演示后端 `DemoClient`。
     private(set) var isDemoMode = false
 
+    /// 欢迎页的开场动效每次启动只放一次（退出登录回到欢迎页不再放）。
+    var hasPlayedSplash = false
+
     var errorMessage: String?
 
     private static let lastDeviceKey = "kimi.lastDeviceID"
