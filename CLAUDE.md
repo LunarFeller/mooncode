@@ -1,4 +1,4 @@
-# kimicode-mobile（产品名 MoonCode）
+# MoonCode（GitHub: qkunio/mooncode）
 
 主屏显示名 `MoonCode`，App Store 名「MoonCode - KimiCode远程控制客户端」。App 已在 App Store Connect 建好，
 **Bundle ID `com.qinkun.kimicode` 不能改**；Keychain service / 日志 subsystem / 工程与 target 名沿用 KimiCode。

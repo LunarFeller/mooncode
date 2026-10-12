@@ -41,8 +41,8 @@ kimi rc
 仓库里是 Xcode 工程，自己编译装上去：
 
 ```bash
-git clone https://github.com/qkunio/kimicode-mobile.git
-cd kimicode-mobile
+git clone https://github.com/qkunio/mooncode.git
+cd mooncode
 open KimiCode.xcodeproj
 ```
 
