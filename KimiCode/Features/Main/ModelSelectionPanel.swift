@@ -4,6 +4,8 @@ import SwiftUI
 struct ModelSelectionPanel: View {
     let models: [ModelInfo]
     let confirm: (ModelInfo, String?) -> Void
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var selectedID: String?
     @State private var selectedEffort: String?
     @State private var query = ""
@@ -28,75 +30,31 @@ struct ModelSelectionPanel: View {
     private var visibleGroups: [ModelCatalog.Group] {
         catalog.groups(matching: query, providerID: providerID)
     }
+    private var scrollsEntirePanel: Bool {
+        verticalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize
+    }
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("模型")
-                .font(.headline)
-                .padding(.top, 28)
-
-            searchField
-                .padding(.horizontal, 24)
-
-            if catalog.groups.count > 1 {
-                providerFilters
-            }
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 20) {
-                    if visibleGroups.isEmpty {
-                        Text(models.isEmpty ? "暂无可用模型" : "没有匹配的模型")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 32)
-                    }
-                    ForEach(visibleGroups) { group in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(group.name)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 8)
-                            VStack(spacing: 0) {
-                                ForEach(Array(group.models.enumerated()), id: \.element.id) { index, model in
-                                    if index > 0 { Divider().padding(.horizontal, 20) }
-                                    choiceRow(model, selected: selectedID == model.model) {
-                                        selectedID = model.model
-                                        selectedEffort = model.resolvedEffort(selectedEffort)
-                                    }
-                                }
-                            }
-                            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 24))
-                        }
+            if scrollsEntirePanel {
+                // 横屏或辅助功能字号时一起滚动，避免固定控件把模型列表挤到零高度。
+                ScrollView {
+                    VStack(spacing: 16) {
+                        header
+                        modelList
+                        effortControl
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 8)
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .scrollDismissesKeyboard(.interactively)
-
-            if let model = selectedModel, !model.efforts.isEmpty {
-                effortMenu(for: model)
-                    .padding(.horizontal, 24)
-                    .fixedSize(horizontal: false, vertical: true)
+                .scrollDismissesKeyboard(.interactively)
+            } else {
+                header
+                ScrollView { modelList }
+                    .scrollBounceBehavior(.basedOnSize)
+                    .scrollDismissesKeyboard(.interactively)
+                effortControl
             }
 
-            Button {
-                guard let model = selectedModel else { return }
-                confirm(model, effectiveEffort(for: model))
-            } label: {
-                Text("完成")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .foregroundStyle(.white)
-                    .background(Palette.kimi, in: .capsule)
-            }
-            .buttonStyle(.plain)
-            .opacity(selectedModel == nil ? 0.4 : 1)
-            .disabled(selectedModel == nil)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 16)
+            confirmButton
         }
         .frame(maxHeight: .infinity)
         .onChange(of: models.map(\.provider)) {
@@ -105,6 +63,76 @@ struct ModelSelectionPanel: View {
             }
         }
         .background(Color(.systemBackground))
+    }
+
+    private var header: some View {
+        VStack(spacing: 16) {
+            Text("模型")
+                .font(.headline)
+                .padding(.top, scrollsEntirePanel ? 8 : 28)
+            searchField
+                .padding(.horizontal, 24)
+            if catalog.groups.count > 1 { providerFilters }
+        }
+    }
+
+    private var modelList: some View {
+        LazyVStack(alignment: .leading, spacing: 20) {
+            if visibleGroups.isEmpty {
+                Text(models.isEmpty ? "暂无可用模型" : "没有匹配的模型")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 32)
+            }
+            ForEach(visibleGroups) { group in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(group.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                    VStack(spacing: 0) {
+                        ForEach(Array(group.models.enumerated()), id: \.element.id) { index, model in
+                            if index > 0 { Divider().padding(.horizontal, 20) }
+                            choiceRow(model, selected: selectedID == model.model) {
+                                selectedID = model.model
+                                selectedEffort = model.resolvedEffort(selectedEffort)
+                            }
+                        }
+                    }
+                    .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 24))
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private var effortControl: some View {
+        if let model = selectedModel, !model.efforts.isEmpty {
+            effortMenu(for: model)
+                .padding(.horizontal, 24)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var confirmButton: some View {
+        Button {
+            guard let model = selectedModel else { return }
+            confirm(model, effectiveEffort(for: model))
+        } label: {
+            Text("完成")
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 50)
+                .foregroundStyle(.white)
+                .background(Palette.kimi, in: .capsule)
+        }
+        .buttonStyle(.plain)
+        .opacity(selectedModel == nil ? 0.4 : 1)
+        .disabled(selectedModel == nil)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 16)
     }
 
     private func effectiveEffort(for model: ModelInfo) -> String? {
@@ -160,7 +188,7 @@ struct ModelSelectionPanel: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    /// 固定在模型列表下方，点击整行弹出原生单选菜单。
+    /// 点击整行弹出原生单选菜单；普通字号竖屏时固定在模型列表下方。
     private func effortMenu(for model: ModelInfo) -> some View {
         Menu {
             Picker("思考强度", selection: Binding(
