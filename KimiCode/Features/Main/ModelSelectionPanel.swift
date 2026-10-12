@@ -4,20 +4,18 @@ import SwiftUI
 struct ModelSelectionPanel: View {
     let models: [ModelInfo]
     let confirm: (ModelInfo, String?) -> Void
-    var onHeight: ((CGFloat) -> Void)?
-
     @State private var selectedID: String?
     @State private var selectedEffort: String?
+    @State private var query = ""
+    @State private var providerID: String?
 
     init(
         models: [ModelInfo],
         config: ComposerConfig,
-        confirm: @escaping (ModelInfo, String?) -> Void,
-        onHeight: ((CGFloat) -> Void)? = nil
+        confirm: @escaping (ModelInfo, String?) -> Void
     ) {
         self.models = models
         self.confirm = confirm
-        self.onHeight = onHeight
         _selectedID = State(initialValue: config.modelID)
         _selectedEffort = State(initialValue: config.effort)
     }
@@ -26,40 +24,56 @@ struct ModelSelectionPanel: View {
         models.first { $0.model == selectedID }
     }
 
+    private var catalog: ModelCatalog { ModelCatalog(models: models) }
+    private var visibleGroups: [ModelCatalog.Group] {
+        catalog.groups(matching: query, providerID: providerID)
+    }
+
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Text("模型")
                 .font(.headline)
                 .padding(.top, 28)
 
+            searchField
+                .padding(.horizontal, 24)
+
+            if catalog.groups.count > 1 {
+                providerFilters
+            }
+
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    if models.isEmpty {
-                        Text("暂无可用模型")
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    if visibleGroups.isEmpty {
+                        Text(models.isEmpty ? "暂无可用模型" : "没有匹配的模型")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity)
-                    } else {
-                        VStack(spacing: 0) {
-                            ForEach(models) { model in
-                                if model.id != models.first?.id {
-                                    Divider().padding(.horizontal, 20)
-                                }
-                                choiceRow(model.name, selected: selectedID == model.model) {
-                                    selectedID = model.model
-                                    if !model.efforts.contains(selectedEffort ?? "") {
-                                        selectedEffort = model.defaultEffort
+                            .padding(.vertical, 32)
+                    }
+                    ForEach(visibleGroups) { group in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(group.name)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8)
+                            VStack(spacing: 0) {
+                                ForEach(Array(group.models.enumerated()), id: \.element.id) { index, model in
+                                    if index > 0 { Divider().padding(.horizontal, 20) }
+                                    choiceRow(model, selected: selectedID == model.model) {
+                                        selectedID = model.model
+                                        selectedEffort = model.resolvedEffort(selectedEffort)
                                     }
                                 }
                             }
+                            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 24))
                         }
-                        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 24))
                     }
-
                 }
                 .padding(.horizontal, 24)
+                .padding(.bottom, 8)
             }
             .scrollBounceBehavior(.basedOnSize)
-            .fixedSize(horizontal: false, vertical: true)
+            .scrollDismissesKeyboard(.interactively)
 
             if let model = selectedModel, !model.efforts.isEmpty {
                 effortMenu(for: model)
@@ -84,16 +98,66 @@ struct ModelSelectionPanel: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 16)
         }
-        // 面板高度按内容算（交给外面设 detent），不留大片空白。
-        .fixedSize(horizontal: false, vertical: true)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeight?($0) }
+        .frame(maxHeight: .infinity)
+        .onChange(of: models.map(\.provider)) {
+            if let providerID, !models.contains(where: { $0.provider == providerID }) {
+                self.providerID = nil
+            }
+        }
         .background(Color(.systemBackground))
     }
 
     private func effectiveEffort(for model: ModelInfo) -> String? {
-        if let selectedEffort, model.efforts.contains(selectedEffort) { return selectedEffort }
-        if let fallback = model.defaultEffort, model.efforts.contains(fallback) { return fallback }
-        return model.efforts.first
+        model.resolvedEffort(selectedEffort)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("搜索模型或来源", text: $query)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清除搜索")
+            }
+        }
+        .padding(14)
+        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 16))
+    }
+
+    private var providerFilters: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                providerFilter("全部", id: nil)
+                ForEach(catalog.groups) { group in
+                    providerFilter(group.name, id: group.id)
+                }
+            }
+            .padding(.horizontal, 24)
+        }
+    }
+
+    private func providerFilter(_ title: String, id: String?) -> some View {
+        let selected = providerID == id
+        return Button { providerID = id } label: {
+            Text(title)
+                .font(.subheadline.weight(selected ? .semibold : .regular))
+                .foregroundStyle(selected ? Palette.kimi : .primary)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+                .background(
+                    selected ? Palette.kimi.opacity(0.12) : Color(.secondarySystemBackground),
+                    in: .capsule
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("模型来源：\(title)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     /// 固定在模型列表下方，点击整行弹出原生单选菜单。
@@ -130,11 +194,18 @@ struct ModelSelectionPanel: View {
         .accessibilityValue(effectiveEffort(for: model)?.effortLabel ?? "")
     }
 
-    private func choiceRow(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func choiceRow(_ model: ModelInfo, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack {
-                Text(title)
-                    .font(.body.weight(.medium))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.name)
+                        .font(.body.weight(.medium))
+                    Text(model.model)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 Spacer(minLength: 12)
                 Image(systemName: "checkmark")
                     .font(.body.weight(.semibold))
@@ -142,10 +213,12 @@ struct ModelSelectionPanel: View {
             }
             .foregroundStyle(.primary)
             .padding(.horizontal, 20)
+            .padding(.vertical, 12)
             .frame(minHeight: 56)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

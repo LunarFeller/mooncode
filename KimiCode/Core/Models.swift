@@ -618,8 +618,16 @@ struct ModelInfo: Decodable, Identifiable, Hashable, Sendable {
     var name: String { displayName ?? (model as NSString).lastPathComponent }
     var acceptsImages: Bool { capabilities?.contains("image_in") ?? false }
     var efforts: [String] { supportEfforts ?? [] }
-    /// 属于「Kimi 订阅」组。App 只提供这一组，别的 provider（如 opencode-go）一律不列。
+    /// 仅用于来源的显示名称，不限制可选模型。
     var isKimiSubscription: Bool { provider == KimiConfig.kimiSubscriptionProvider }
+    var providerName: String { isKimiSubscription ? "Kimi 订阅" : provider }
+
+    /// 换模型或恢复偏好时校正档位；不支持思考强度的模型不发送 thinking。
+    func resolvedEffort(_ preferred: String?) -> String? {
+        if let preferred, efforts.contains(preferred) { return preferred }
+        if let defaultEffort, efforts.contains(defaultEffort) { return defaultEffort }
+        return efforts.first
+    }
 
     enum CodingKeys: String, CodingKey {
         case provider, model, capabilities
