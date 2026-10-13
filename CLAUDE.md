@@ -77,6 +77,12 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 图片与文件均逐个上传，并在网络层拒绝超过 9 MiB 的单附件，给隧道 HTTP / multipart 开销留出余量。
 `bash scripts/check-attachments.sh` 覆盖多图请求大小、图片与文件混合、上传 / 发消息失败的重试及草稿隔离。
 
+对话图片按 transcript 的 `attachmentId` 区分，保留 `source`，从鉴权的 `/files/{id}` 或
+`/sessions/{sessionId}/media/{fileId}` 读取缩略图并支持点击预览；同名图片不能合并。
+乐观消息通过提交返回的 `prompt_id` / `user_message_id` 与 turn 的 `triggerPromptId` 核对清理，
+不能用正文相同来确认收到，否则纯图片或重复文字会误判。需处理回显先于 HTTP 响应到达的顺序。
+上述脚本同时覆盖纯图片、重复文字、回显先到、媒体来源解析与同名附件标识。
+
 ---
 
 ## 1. 上游实现调研结论（2026-09-18 逆向）
