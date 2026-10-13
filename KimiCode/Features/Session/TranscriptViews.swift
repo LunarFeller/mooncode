@@ -8,14 +8,28 @@ import SwiftUI
 @MainActor
 @Observable
 final class TranscriptUIState {
-    private var open: [String: Bool] = [:]
+    /// 每个开关各自是一个可观察对象，只有读了这个 key 的视图会重绘。
+    /// 全放在一个可观察的字典里的话，点开任何一个，整条对话（含所有 Markdown）都要重算，展开会卡。
+    @ObservationIgnored private var toggles: [String: Toggle] = [:]
     /// 进行中的一组「思考 + 工具」量出来的耗时，结束后显示在摘要尾部。
     var runDurations: [String: Double] = [:]
     var runStarts: [String: Date] = [:]
 
-    func isOpen(_ key: String, default value: Bool) -> Bool { open[key] ?? value }
-    func override(_ key: String) -> Bool? { open[key] }
-    func set(_ key: String, _ value: Bool?) { open[key] = value }
+    func isOpen(_ key: String, default value: Bool) -> Bool { toggle(key).value ?? value }
+    func override(_ key: String) -> Bool? { toggle(key).value }
+    func set(_ key: String, _ value: Bool?) { toggle(key).value = value }
+
+    private func toggle(_ key: String) -> Toggle {
+        if let existing = toggles[key] { return existing }
+        let created = Toggle()
+        toggles[key] = created
+        return created
+    }
+
+    @Observable
+    final class Toggle {
+        var value: Bool?
+    }
 }
 
 // MARK: - 整条对话
@@ -215,7 +229,7 @@ struct UserTurnView: View {
                         }
                     if isClamped {
                         Button {
-                            withAnimation(.snappy) { expanded.toggle() }
+                            withAnimation(.disclosure) { expanded.toggle() }
                         } label: {
                             HStack(spacing: 2) {
                                 Text(expanded ? "收起" : "展开")
@@ -453,7 +467,7 @@ struct TurnFoldView: View {
         VStack(alignment: .leading, spacing: 0) {
             if !streaming {
                 Button {
-                    withAnimation(.snappy(duration: 0.25)) { ui.set(key, !open) }
+                    withAnimation(.disclosure) { ui.set(key, !open) }
                 } label: {
                     HStack(spacing: 8) {
                         if live {
@@ -542,7 +556,7 @@ struct ActivityRunView: View {
         let open = ui.override(key) ?? (status == .running)
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.snappy(duration: 0.25)) { ui.set(key, !open) }
+                withAnimation(.disclosure) { ui.set(key, !open) }
             } label: {
                 HStack(spacing: 8) {
                     if status == .running {
@@ -617,18 +631,49 @@ struct ActivityRunView: View {
 
 // MARK: - 思考
 
+extension Animation {
+    /// 正文里各种展开 / 收起统一用缓动，不用弹簧：内容高度一变，弹簧的回弹会让整页上下蹦。
+    static let disclosure = Animation.easeInOut(duration: 0.25)
+}
+
+extension EnvironmentValues {
+    /// 把正文里带 `.id` 的某个视图滚到可视区的 `anchor` 处（ChatScreen 注入）。
+    @Entry var revealInTranscript: @MainActor (String, UnitPoint) -> Void = { _, _ in }
+}
+
 struct ThinkingBlockView: View {
     let item: ThinkingItem
     let ui: TranscriptUIState
     let streaming: Bool
 
+    @Environment(\.revealInTranscript) private var reveal
+    /// 展开 / 收起动画期间给正文限高（从下往上裁），做出卷帘效果；nil = 不限。
+    @State private var cap: CGFloat?
+    /// 箭头单独跟着点击带动画转（正文的增删走卷帘、不带动画）；nil = 跟随实际开合。
+    @State private var arrowOpen: Bool?
+    /// 标题位置、正文高度、可视区高度。放在引用类型里：滚动时每帧都在变，不该触发重绘。
+    @State private var metrics = Metrics()
+
     private var key: String { "think:\(item.id)" }
+    private var headerID: String { "think-header:\(item.id)" }
+    /// 标题滚回来后停的位置：留出左上 / 右上浮动按钮的高度。
+    private static let revealAnchor = UnitPoint(x: 0, y: 0.14)
+    /// 卷帘：缓动、不回弹，慢到看得清。
+    private static let roll = Animation.easeInOut(duration: 0.32)
+    /// 读到中段收起时，先滚回标题的时长（秒）。
+    private static let rewindSeconds = 0.38
+
+    private final class Metrics {
+        var headerMinY: CGFloat = 0
+        var bodyHeight: CGFloat = 0
+        var viewport: CGFloat = 900
+    }
 
     var body: some View {
         let open = ui.isOpen(key, default: false)
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.snappy(duration: 0.25)) { ui.set(key, !open) }
+                open ? collapse() : expand()
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "lightbulb")
@@ -644,7 +689,7 @@ struct ThinkingBlockView: View {
                     } else if let duration = item.durationMs, let text = Durations.format(duration), !text.isEmpty {
                         Text("· \(text)").foregroundStyle(.tertiary)
                     }
-                    Chevron(open: open)
+                    Chevron(open: arrowOpen ?? open)
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -652,24 +697,137 @@ struct ThinkingBlockView: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .id(headerID)
+            .onGeometryChange(for: CGRect.self) { proxy in
+                CGRect(
+                    x: 0, y: proxy.frame(in: .global).minY,
+                    width: 0, height: proxy.bounds(of: .scrollView)?.height ?? 0
+                )
+            } action: { value in
+                metrics.headerMinY = value.minY
+                if value.height > 0 { metrics.viewport = value.height }
+            }
 
             if open {
                 IndentedBody {
-                    Text(item.text)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
+                    // 长思考动辄上万字：按段拆开、懒加载，只排屏幕上看得到的那几段。
+                    // 整段放进一个 Text 的话，每次展开都要把上万字排好几遍，主线程卡半秒多。
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(Self.paragraphs(item.text).enumerated()), id: \.offset) { _, paragraph in
+                            Text(paragraph)
+                                .lineSpacing(3)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 6)
                 }
-                .transition(.opacity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { metrics.bodyHeight = $0 }
+                .capped(at: cap)
+                // 展开后点正文也能收起（长按仍是选中文本）。
+                .contentShape(.rect)
+                .onTapGesture { collapse() }
             }
         }
         .onChange(of: streaming) { wasStreaming, isStreaming in
             // 思考结束时自动收起。
             if wasStreaming, !isStreaming { ui.set(key, false) }
         }
+    }
+
+    /// 卷帘往下展开：先以 0 高度插进来，再把限高缓动到一屏，展开完撤掉限高（多出来的在屏幕外）。
+    private func expand() {
+        withAnimation(.disclosure) { arrowOpen = true }
+        withoutAnimation {
+            cap = 0
+            ui.set(key, true)
+        }
+        DispatchQueue.main.async {
+            withAnimation(Self.roll) {
+                cap = min(metrics.bodyHeight, metrics.viewport)
+            } completion: {
+                withoutAnimation {
+                    cap = nil
+                    arrowOpen = nil
+                }
+            }
+        }
+    }
+
+    /// 卷帘往上收。读到中段（标题已滚出屏幕）时先把标题平滑滚回来，让人看清回到了哪里，再收。
+    private func collapse() {
+        withAnimation(.disclosure) { arrowOpen = false }
+        if metrics.headerMinY < 110 {
+            withAnimation(.easeInOut(duration: Self.rewindSeconds)) {
+                reveal(headerID, Self.revealAnchor)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.rewindSeconds) { rollUp() }
+        } else {
+            rollUp()
+        }
+    }
+
+    private func rollUp() {
+        // 先把限高收到一屏：超出部分本来就在屏幕外，看不出变化，卷帘的速度才看得清。
+        withoutAnimation { cap = min(metrics.bodyHeight, metrics.viewport) }
+        DispatchQueue.main.async {
+            withAnimation(Self.roll) {
+                cap = 0
+            } completion: {
+                withoutAnimation {
+                    ui.set(key, false)
+                    cap = nil
+                    arrowOpen = nil
+                }
+            }
+        }
+    }
+
+    private func withoutAnimation(_ change: () -> Void) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction, change)
+    }
+
+    /// 按空行分段（段内换行保留）。
+    private static func paragraphs(_ text: String) -> [String] {
+        text.components(separatedBy: "\n\n")
+            .map { $0.trimmingCharacters(in: .newlines) }
+            .filter { !$0.isEmpty }
+    }
+}
+
+private extension View {
+    /// 卷帘：内容按自己的完整高度排，对外只报 `cap` 那么高、多出的裁掉；nil = 不限。
+    /// 不用 `.frame(height:)`：那会把限高当成建议尺寸传给内容，长文本会被压扁重排。
+    func capped(at cap: CGFloat?) -> some View {
+        CappedHeightLayout(cap: cap ?? .infinity) { self }
+            .clipped()
+    }
+}
+
+private struct CappedHeightLayout: Layout {
+    var cap: CGFloat
+
+    var animatableData: CGFloat {
+        get { cap }
+        set { cap = newValue }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let size = child.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        return CGSize(width: proposal.width ?? size.width, height: min(size.height, max(cap, 0)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: nil)
+        )
     }
 }
 
@@ -687,7 +845,7 @@ struct ToolLineView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 guard expandable else { return }
-                withAnimation(.snappy(duration: 0.25)) { ui.set(key, !open) }
+                withAnimation(.disclosure) { ui.set(key, !open) }
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: ToolNames.symbol(tool.name))
