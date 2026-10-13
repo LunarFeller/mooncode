@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 /// composer 上那一排的选择：权限模式 / 模型 / 思考强度。新会话会继承上一次的选择。
 struct ComposerConfig: Codable, Equatable, Sendable {
@@ -87,6 +88,13 @@ final class ChatModel {
 
     private var stream: EventStream?
     private var streamTask: Task<Void, Never>?
+    private var foregroundTask: Task<Void, Never>?
+    /// 正在全量重拉的次数。期间收到的正文增量先存着，拉完再按顺序补上（网页端 `buffered`），
+    /// 否则会先应用到旧数据上、再被重拉结果整个盖掉。
+    private var activeReloads = 0
+    private var bufferedTranscript: [TranscriptWireEvent] = []
+    /// 连续收到「空快照」的次数，用来退避重拉（网页端 `emptyResetRetries`）。
+    private var emptyResetRetries = 0
     private let interactionRefresh = RefreshScheduler()
     private let transcriptReload = RefreshScheduler()
 
@@ -196,11 +204,19 @@ final class ChatModel {
                 await self?.handle(signal)
             }
         }
+        // 回到前台：后台时连接多半已经被系统掐掉，先检查一下，断了就立刻重连（网页端 focus 时同样处理）。
+        foregroundTask = Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification) {
+                await self?.stream?.reconnectIfStale()
+            }
+        }
     }
 
     func stop() {
         streamTask?.cancel()
         streamTask = nil
+        foregroundTask?.cancel()
+        foregroundTask = nil
         interactionRefresh.cancel()
         transcriptReload.cancel()
         let stream = stream
@@ -216,7 +232,16 @@ final class ChatModel {
         // 只在屏幕上什么都没有时转圈（打开已有会话的首屏）。草稿发出第一条后建会话再重拉，
         // 那条消息已经乐观显示着，不该在它上面再冒一个圈。
         isLoading = entries.isEmpty && optimisticPrompts.isEmpty
-        defer { isLoading = false }
+        activeReloads += 1
+        defer {
+            isLoading = false
+            activeReloads -= 1
+            if activeReloads == 0 {
+                let pending = bufferedTranscript
+                bufferedTranscript = []
+                for event in pending { apply(event) }
+            }
+        }
         do {
             async let page = client.transcript(sessionID)
             async let status = client.status(sessionID)
@@ -532,7 +557,11 @@ final class ChatModel {
 
         case let .transcript(eventSession, event):
             guard eventSession == sessionID else { return }
-            apply(event)
+            if activeReloads > 0 {
+                bufferedTranscript.append(event)
+            } else {
+                apply(event)
+            }
 
         case let .event(event):
             guard event.sessionID == nil || event.sessionID == sessionID else { return }
@@ -548,6 +577,16 @@ final class ChatModel {
         switch event {
         case let .reset(agentId, snapshot, hasMoreOlder, seq):
             guard agentId == "main" else { return }
+            // 服务端推的 reset 快照一轮都不带（`TRANSCRIPT_RESET_TAIL_TURNS = 0`），只是「请重拉」的信号。
+            // 冷会话首屏 REST 没有 seq，订阅时就会收到它 —— 照单全收会把已经显示的正文清空，
+            // 只剩一行「加载更早的消息」。照网页端：不替换，退避后走 REST 重拉。
+            let hasTurns = snapshot.items.contains { if case .turn = $0 { true } else { false } }
+            if !hasTurns, snapshot.hasMoreOlder ?? hasMoreOlder {
+                emptyResetRetries += 1
+                scheduleTranscriptReload(after: .seconds(min(emptyResetRetries * 2, 15)))
+                return
+            }
+            emptyResetRetries = 0
             transcript = TranscriptState(snapshot: snapshot, hasMoreOlder: hasMoreOlder, seq: seq)
             rebuild()
             scheduleInteractionRefresh()
@@ -555,8 +594,16 @@ final class ChatModel {
 
         case let .ops(agentId, ops, seq):
             guard agentId == "main" else { return }
-            // 已经应用过的批次（重连补发时会重叠）跳过。
-            if let seq, let current = transcript.seq, seq <= current { return }
+            if let seq, let current = transcript.seq {
+                // 已经应用过的批次（重连补发时会重叠）跳过。
+                if seq <= current { return }
+                // 批次序号是逐批 +1 的：跳号 = 中间漏了，全量重拉（网页端 onGap）。
+                // 不能硬接着应用：漏掉的可能正是这一轮的开头，后面的增量会凭空建出一个没有用户消息的空壳。
+                guard seq == current + 1 else {
+                    scheduleTranscriptReload()
+                    return
+                }
+            }
             let wasActive = transcript.isTurnActive
             for op in ops {
                 if case .interactionUpsert = op { scheduleInteractionRefresh() }
@@ -581,8 +628,8 @@ final class ChatModel {
         }
     }
 
-    private func scheduleTranscriptReload() {
-        transcriptReload.schedule(after: .milliseconds(300)) { [weak self] in
+    private func scheduleTranscriptReload(after delay: Duration = .milliseconds(300)) {
+        transcriptReload.schedule(after: delay) { [weak self] in
             await self?.reload()
             guard let self, let sessionID = self.sessionID else { return }
             await self.stream?.subscribeTranscript(sessionID, since: self.transcript.seq)

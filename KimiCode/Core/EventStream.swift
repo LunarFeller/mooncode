@@ -57,6 +57,12 @@ actor EventStream {
     private var messageSeq = 0
     private var reconnectAttempt = 0
     private var isStopped = false
+    /// 最后一次收到任何帧（含 pong）的时间，判断连接是不是已经悄悄断了。
+    private var lastActivity: ContinuousClock.Instant?
+    private var heartbeatMS = 10_000
+    /// 退避等待中；`reconnectIfStale` 取消它就能立刻重连。
+    private var backoffTask: Task<Void, Never>?
+    private var skipBackoff = false
 
     private struct Cursor: Encodable {
         let seq: Int
@@ -75,7 +81,8 @@ actor EventStream {
 
     /// 开始连接，返回信号流。重连由内部自动处理，流不会因为断线而结束。
     func start() -> AsyncStream<StreamSignal> {
-        let (stream, continuation) = AsyncStream<StreamSignal>.makeStream(bufferingPolicy: .bufferingNewest(512))
+        // 不能丢：重连时服务端一次补发的批次可能上千条，丢了任何一批正文都会缺一块。
+        let (stream, continuation) = AsyncStream<StreamSignal>.makeStream(bufferingPolicy: .unbounded)
         self.continuation = continuation
         isStopped = false
         pumpTask = Task { await runLoop() }
@@ -85,6 +92,7 @@ actor EventStream {
     func stop() {
         isStopped = true
         pumpTask?.cancel()
+        backoffTask?.cancel()
         keepAliveTask?.cancel()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -145,6 +153,23 @@ actor EventStream {
         ])
     }
 
+    /// App 回到前台时调用（对照网页端 focus / visibilitychange 时的 stale 检查）：
+    /// 超过两个心跳周期没收到任何帧，说明连接在后台已经断了，立刻重连，不等系统报错和退避。
+    func reconnectIfStale() {
+        guard !isStopped else { return }
+        if let task {
+            let limit = Duration.milliseconds(max(heartbeatMS * 2, 10_000))
+            guard let lastActivity, ContinuousClock.now - lastActivity > limit else { return }
+            logger.info("ws 回到前台时已失联，重连")
+            skipBackoff = true
+            task.cancel(with: .goingAway, reason: nil)
+        } else {
+            // 正在退避等待：跳过剩下的等待。
+            reconnectAttempt = 0
+            backoffTask?.cancel()
+        }
+    }
+
     // MARK: 连接循环
 
     private func runLoop() async {
@@ -161,10 +186,18 @@ actor EventStream {
                 continuation?.yield(.disconnected(reason: error.localizedDescription))
             }
             if isStopped || Task.isCancelled { return }
+            if skipBackoff {
+                skipBackoff = false
+                reconnectAttempt = 0
+                continue
+            }
             reconnectAttempt += 1
             // 指数退避，上限 30s —— 与桌面端隧道的退避一致。
             let delay = min(30.0, pow(2.0, Double(min(reconnectAttempt - 1, 5))))
-            try? await Task.sleep(for: .seconds(delay))
+            let backoff = Task { _ = try? await Task.sleep(for: .seconds(delay)) }
+            backoffTask = backoff
+            await backoff.value
+            backoffTask = nil
         }
     }
 
@@ -187,6 +220,8 @@ actor EventStream {
         let task = session.webSocketTask(with: request)
         self.session = session
         self.task = task
+        // 新连接从现在起算，别拿上一条连接的时间误判它失联。
+        lastActivity = .now
         task.resume()
 
         defer {
@@ -202,7 +237,9 @@ actor EventStream {
         guard hello["type"]?.stringValue == "server_hello" else {
             throw KapError.http(status: 0, body: "期待 server_hello，收到 \(hello["type"]?.stringValue ?? "?")")
         }
+        lastActivity = .now
         let heartbeatMS = hello["payload"]?["heartbeat_ms"]?.intValue
+        if let heartbeatMS { self.heartbeatMS = heartbeatMS }
         logger.info("server_hello protocol=\(hello["payload"]?["protocol_version"]?.intValue ?? -1)")
 
         // client_hello：把已订阅的会话和游标一起带上，服务端会回 ack。
@@ -225,6 +262,7 @@ actor EventStream {
 
         while !isStopped, !Task.isCancelled {
             let frame = try await receiveFrame(on: task)
+            lastActivity = .now
             handle(frame)
         }
     }
