@@ -248,7 +248,13 @@ struct UserTurnView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(Palette.userBubble, in: .rect(cornerRadius: 12))
-            .containerRelativeFrame(.horizontal, alignment: .trailing) { width, _ in width * 0.88 }
+            .containerRelativeFrame(.horizontal, alignment: .trailing) { width, _ in
+                let maxWidth = width * 0.88
+                if entry.text.isEmpty, !entry.attachments.isEmpty, entry.attachments.allSatisfy(\.isImage) {
+                    return AttachmentThumbnailLayout.contentWidth(for: entry.attachments.count, in: maxWidth - 24) + 24
+                }
+                return maxWidth
+            }
 
             HStack(spacing: 6) {
                 if !entry.text.isEmpty {
@@ -282,7 +288,7 @@ private struct FlowAttachments: View {
         VStack(alignment: .leading, spacing: 6) {
             let images = attachments.filter(\.isImage)
             if !images.isEmpty {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: images.count == 1 ? 1 : 2), spacing: 8) {
+                AttachmentThumbnailLayout {
                     ForEach(Array(images.enumerated()), id: \.element.id) { index, attachment in
                         RemoteAttachmentImage(attachment: attachment, number: index + 1, load: load)
                     }
@@ -342,7 +348,17 @@ private struct OptimisticPromptRow: View {
             .padding(.vertical, 10)
             .background(Palette.userBubble, in: .rect(cornerRadius: 12))
             .opacity(prompt.failed ? 0.6 : 1)
-            .containerRelativeFrame(.horizontal, alignment: .trailing) { width, _ in width * 0.88 }
+            .containerRelativeFrame(.horizontal, alignment: .trailing) { width, _ in
+                let maxWidth = width * 0.88
+                let imageOnly = !prompt.attachments.isEmpty && prompt.attachments.allSatisfy {
+                    if case .image = $0 { return true }
+                    return false
+                }
+                if prompt.text.isEmpty, imageOnly {
+                    return AttachmentThumbnailLayout.contentWidth(for: prompt.attachments.count, in: maxWidth - 24) + 24
+                }
+                return maxWidth
+            }
 
             if prompt.failed {
                 HStack(spacing: 12) {

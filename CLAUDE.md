@@ -79,6 +79,8 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 
 对话图片按 transcript 的 `attachmentId` 区分，保留 `source`，从鉴权的 `/files/{id}` 或
 `/sessions/{sessionId}/media/{fileId}` 读取缩略图并支持点击预览；同名图片不能合并。
+聊天气泡缩略图采用 74pt 外框（图片内容 72pt），右下角显示从 1 开始的序号；空间不足按顺序换行。
+纯图片的气泡按缩略图内容收紧，发送中 / 失败消息采用相同布局。
 乐观消息通过提交返回的 `prompt_id` / `user_message_id` 与 turn 的 `triggerPromptId` 核对清理，
 不能用正文相同来确认收到，否则纯图片或重复文字会误判。需处理回显先于 HTTP 响应到达的顺序。
 上述脚本同时覆盖纯图片、重复文字、回显先到、媒体来源解析与同名附件标识。

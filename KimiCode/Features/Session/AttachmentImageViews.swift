@@ -20,20 +20,21 @@ struct RemoteAttachmentImage: View {
             ZStack {
                 Palette.fill
                 if let thumbnail {
-                    Image(uiImage: thumbnail).resizable().scaledToFit()
+                    Image(uiImage: thumbnail).resizable().scaledToFit().padding(1)
                 } else if failed {
                     VStack(spacing: 6) {
                         Image(systemName: "photo.badge.exclamationmark")
-                        Text("图片加载失败").font(.caption)
-                        Text("点击重试").font(.caption)
+                        Text("重试").font(.caption2)
                     }
                     .foregroundStyle(.secondary)
                 } else {
                     ProgressView().accessibilityLabel("正在加载图片")
                 }
             }
-            .aspectRatio(1, contentMode: .fit)
+            .frame(width: AttachmentThumbnailLayout.side, height: AttachmentThumbnailLayout.side)
             .clipShape(.rect(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.1)) }
+            .overlay(alignment: .bottomTrailing) { AttachmentNumberBadge(number: number) }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(failed ? "重试图片 \(number)" : "预览图片 \(number)")
@@ -72,17 +73,19 @@ struct LocalAttachmentPreviews: View {
             return nil
         }
         if !images.isEmpty {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: images.count == 1 ? 1 : 2), spacing: 8) {
+            AttachmentThumbnailLayout {
                 ForEach(Array(images.enumerated()), id: \.element.0) { index, image in
                     Button { selected = Preview(id: image.0, data: image.1) } label: {
                         ZStack {
                             Palette.fill
                             if let thumbnail = UIImage(data: image.2) ?? AttachmentImageThumbnail.make(image.1) {
-                                Image(uiImage: thumbnail).resizable().scaledToFit()
+                                Image(uiImage: thumbnail).resizable().scaledToFit().padding(1)
                             } else { Image(systemName: "photo").foregroundStyle(.secondary) }
                         }
-                        .aspectRatio(1, contentMode: .fit)
+                        .frame(width: AttachmentThumbnailLayout.side, height: AttachmentThumbnailLayout.side)
                         .clipShape(.rect(cornerRadius: 12))
+                        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.1)) }
+                        .overlay(alignment: .bottomTrailing) { AttachmentNumberBadge(number: index + 1) }
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("预览待发送图片 \(index + 1)")
@@ -96,6 +99,58 @@ struct LocalAttachmentPreviews: View {
         }
         Color.clear.frame(height: 0)
             .sheet(item: $selected) { AttachmentImagePreview(data: $0.data) }
+    }
+}
+
+/// 与手机尺寸网页的 74pt 外框接近；固定缩略图尺寸，空间不足时按顺序换行。
+struct AttachmentThumbnailLayout: Layout {
+    static let side: CGFloat = 74
+    private static let spacing: CGFloat = 8
+
+    private static func columns(for count: Int, in width: CGFloat) -> Int {
+        guard count > 0 else { return 1 }
+        guard width.isFinite else { return count }
+        let capacity = (max(side, width) + spacing) / (side + spacing)
+        return max(1, Int(min(CGFloat(count), capacity)))
+    }
+
+    static func contentWidth(for count: Int, in width: CGFloat) -> CGFloat {
+        guard count > 0 else { return 0 }
+        let columns = columns(for: count, in: width)
+        return CGFloat(columns) * side + CGFloat(columns - 1) * spacing
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let idealWidth = CGFloat(subviews.count) * Self.side + CGFloat(subviews.count - 1) * Self.spacing
+        let width = Self.contentWidth(for: subviews.count, in: proposal.width ?? idealWidth)
+        let columns = Self.columns(for: subviews.count, in: width)
+        let rows = (subviews.count + columns - 1) / columns
+        return CGSize(width: width, height: CGFloat(rows) * Self.side + CGFloat(rows - 1) * Self.spacing)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let columns = Self.columns(for: subviews.count, in: bounds.width)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(
+                x: bounds.minX + CGFloat(index % columns) * (Self.side + Self.spacing),
+                y: bounds.minY + CGFloat(index / columns) * (Self.side + Self.spacing)
+            ), anchor: .topLeading, proposal: ProposedViewSize(width: Self.side, height: Self.side))
+        }
+    }
+}
+
+private struct AttachmentNumberBadge: View {
+    let number: Int
+
+    var body: some View {
+        Text("\(number)")
+            .font(.system(size: 11, weight: .medium).monospacedDigit())
+            .foregroundStyle(.white)
+            .frame(minWidth: 20, minHeight: 20)
+            .background(.black.opacity(0.65), in: .circle)
+            .padding(2)
+            .accessibilityHidden(true)
     }
 }
 
