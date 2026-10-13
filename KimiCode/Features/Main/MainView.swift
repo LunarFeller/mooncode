@@ -120,15 +120,41 @@ private struct SidebarPanGesture: UIGestureRecognizerRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var isOpen: Bool
+        /// 本次触摸落在的视图，用来判断手指下面有没有能横向滚动的内容（代码块、表格、diff）。
+        private weak var touchedView: UIView?
 
         init(isOpen: Bool) { self.isOpen = isOpen }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            touchedView = touch.view
+            return true
+        }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
             let velocity = pan.velocity(in: pan.view?.window)
             // 只在开始时判一次方向，后续手指上下偏移不会切回滚动。
-            return abs(velocity.x) > abs(velocity.y) * 1.5
-                && (isOpen || velocity.x > 0)
+            guard abs(velocity.x) > abs(velocity.y) * 1.5, isOpen || velocity.x > 0 else { return false }
+            // 横向可滚的内容优先自己滚；已经滚到最左还往右滑，才交给侧栏。
+            if let scrollView = horizontalScrollView(from: touchedView) {
+                let atLeadingEdge = scrollView.contentOffset.x <= -scrollView.adjustedContentInset.left + 1
+                return velocity.x > 0 && atLeadingEdge
+            }
+            return true
+        }
+
+        private func horizontalScrollView(from view: UIView?) -> UIScrollView? {
+            var current = view
+            while let candidate = current {
+                if let scrollView = candidate as? UIScrollView, scrollView.isScrollEnabled {
+                    let insets = scrollView.adjustedContentInset
+                    if scrollView.contentSize.width + insets.left + insets.right > scrollView.bounds.width + 1 {
+                        return scrollView
+                    }
+                }
+                current = candidate.superview
+            }
+            return nil
         }
 
         func gestureRecognizer(
