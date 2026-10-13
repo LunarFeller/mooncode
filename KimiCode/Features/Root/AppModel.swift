@@ -189,13 +189,17 @@ final class AppModel {
         if let value = try? await client.usage() { usage = value }
     }
 
-    /// 打开模型面板时更新目录，包含电脑上新配置的模型来源。
+    /// 打开模型面板时更新目录及默认模型，包含电脑上新配置的模型来源。
     func refreshModels() async {
         guard let client, let deviceID = endpoint?.deviceID else { return }
+        async let refreshedModels = client.models()
+        async let refreshedDefaults = client.configDefaults()
         do {
-            let refreshed = try await client.models()
-            guard endpoint?.deviceID == deviceID else { return }
+            let refreshed = try await refreshedModels
+            let defaults = try? await refreshedDefaults
+            guard endpoint?.deviceID == deviceID, !Task.isCancelled else { return }
             models = refreshed
+            if let defaults { defaultModelID = defaults.defaultModel }
         } catch {
             guard endpoint?.deviceID == deviceID, !Task.isCancelled,
                   !(error is CancellationError), (error as? URLError)?.code != .cancelled else { return }

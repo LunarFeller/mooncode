@@ -383,6 +383,8 @@ final class ChatModel {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let pending = attachments
         guard !trimmed.isEmpty || !pending.isEmpty, !isWorking else { return }
+        // 目录在面板打开时可能更新；关闭面板后发送仍要符合最新档位能力。
+        normalizeEffort()
         if let model = modelInfo(config.modelID), !model.acceptsImages,
            pending.contains(where: { if case .image = $0 { true } else { false } }) {
             // 图片可能是在切换模型之前选的；保留附件和输入，不向不支持图片的模型提交。

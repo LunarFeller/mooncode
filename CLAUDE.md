@@ -65,10 +65,10 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 | 退出登录 | 本地清凭证 | alert「是否退出登录？」→ 取消 / 退出 |
 | 权限图标 | `GET /sessions/{id}/status` 的 `permission` | composer 上只显示图标（hand.raised / checkmark.shield / bolt.shield），文字只在菜单里。**标签映射别弄反**：`manual`=始终询问、`yolo`=必要时询问、`auto`=完全自动 |
 | 右上角 ⋯ 面板 | 上：`/status` 的 `context_usage`（同心圆 + 已使用 x%；输入框上不再放上下文圈）；下：`GET /oauth/usage` → `quota.usages.{limit5h,limit7d,monthTotal}`，显示**剩余** `1 - usedRatio` | 按 5 小时 → 每周 → 每月 顺序显示存在的项（实测这个账号是 5 小时 + 每月）。打开时刷新 |
-| K3·Low | 同上 `model` + `thinking_level`；名字查 `GET /models` 的 `display_name`，可选强度查 `support_efforts` | 模型不支持强度时只显示名字 |
-| 模型菜单 | `GET /models` 返回的全部已配置模型，打开面板时刷新 | 按 `provider` 分组，支持来源筛选和名称 / 别名 / 来源搜索。`managed:kimi-code` 显示为「Kimi 订阅」，其它来源显示配置中的 provider id；配置及 API 密钥仍在电脑上管理 |
+| K3·Low | 同上 `model` + `thinking_level`；名字查 `GET /models` 的 `display_name`，可选强度结合 `support_efforts` 与 `thinking` / `always_thinking` 能力 | 可关闭的模型额外提供 Off；无具体档位的思考模型提供 On / Off，始终思考模型不提供 Off；不支持思考时只显示名字 |
+| 模型菜单 | `GET /models` 返回的全部已配置模型，打开面板时同时刷新目录与 `GET /config` 默认模型 | 按 `provider` 分组，支持来源筛选和名称 / 别名 / 来源搜索。`managed:kimi-code` 显示为「Kimi 订阅」，其它来源显示配置中的 provider id；配置及 API 密钥仍在电脑上管理 |
 | 改权限 / 模型 / 强度 | `POST /sessions/{id}/profile {agent_config:{permission_mode?, model?, thinking?}}` | 只带改动的字段 |
-| 新对话默认值 | 上次仍可用的选择（UserDefaults）；第一次：`auto` + `GET /config` 的 `default_model` + 该模型的有效思考档位 | 任意来源都可作为默认 / 记住的模型；不存在才回退到服务端默认或目录第一款。思考档位按 `support_efforts` 校正，不支持时不发送 `thinking` |
+| 新对话默认值 | 上次仍可用的选择（UserDefaults）；第一次：`auto` + `GET /config` 的 `default_model` + 该模型的有效思考档位 | 任意来源都可作为默认 / 记住的模型；不存在才回退到服务端默认或目录第一款。保留合法 Off；未声明默认档位时采用上游的中间档；不支持思考时不发送 `thinking`，发送前按最新目录校正档位 |
 | + 菜单：图片 | prompt 的 `{type:"image", source:{kind:"base64", media_type, data}}` | 长边缩到 1600px JPEG（隧道单请求 10 MiB 上限）；模型无 `image_in` 时禁用 |
 | + 菜单：文件 | 先 multipart `POST /files`（字段 `file`+`name`）→ `{id,name,media_type,size}`，再发 `{type:"file", file_id, name, media_type, size}` | 与网页端 `uploadFile` 同形；选中时读进内存，发送时上传；单文件上限 9 MB |
 | ↑ / ■ | `POST /sessions/{id}/prompts`（每条都带 `model / thinking / permission_mode`，与网页端 `submitPrompt` 同形）；停止 `POST /sessions/{id}:abort {}` | **不做排队**：本轮在跑时只显示 ■，不能再发。也不做斜杠命令 |

@@ -617,7 +617,19 @@ struct ModelInfo: Decodable, Identifiable, Hashable, Sendable {
     var id: String { model }
     var name: String { displayName ?? (model as NSString).lastPathComponent }
     var acceptsImages: Bool { capabilities?.contains("image_in") ?? false }
-    var efforts: [String] { supportEfforts ?? [] }
+    /// support_efforts 只列具体档位；可关闭模型另外提供 Off，无具体档位时用 On / Off。
+    var efforts: [String] {
+        let levels = thinkingLevels
+        guard !levels.isEmpty || supportsThinking else { return [] }
+        if alwaysThinking { return levels.isEmpty ? ["on"] : levels }
+        return levels.isEmpty ? ["on", "off"] : ["off"] + levels
+    }
+
+    private var alwaysThinking: Bool { capabilities?.contains("always_thinking") == true }
+    private var supportsThinking: Bool {
+        alwaysThinking || capabilities?.contains("thinking") == true
+    }
+    private var thinkingLevels: [String] { (supportEfforts ?? []).filter { $0 != "off" } }
     /// 仅用于来源的显示名称，不限制可选模型。
     var isKimiSubscription: Bool { provider == KimiConfig.kimiSubscriptionProvider }
     var providerName: String { isKimiSubscription ? "Kimi 订阅" : provider }
@@ -626,6 +638,14 @@ struct ModelInfo: Decodable, Identifiable, Hashable, Sendable {
     func resolvedEffort(_ preferred: String?) -> String? {
         if let preferred, efforts.contains(preferred) { return preferred }
         if let defaultEffort, efforts.contains(defaultEffort) { return defaultEffort }
+        let declared = supportEfforts ?? []
+        // 与官方网页和后端一致；也兼容目录已经把 Off 列在档位中的情况。
+        if !declared.isEmpty {
+            let fallback = declared[declared.count / 2]
+            if efforts.contains(fallback) { return fallback }
+        }
+        let levels = thinkingLevels
+        if !levels.isEmpty { return levels[levels.count / 2] }
         return efforts.first
     }
 
