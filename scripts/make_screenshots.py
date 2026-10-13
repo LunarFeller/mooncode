@@ -13,27 +13,33 @@ PINGFANG = (
     "/System/Library/AssetsV2/com_apple_MobileAsset_Font7/"
     "3419f2a427639ad8c8e139149a287865a90fa17e.asset/AssetData/PingFang.ttc"
 )
-SC_SEMIBOLD, SC_REGULAR = 11, 3
+SC_SEMIBOLD = 11
 
-KIMI_TOP = (40, 146, 255)
-KIMI_BOTTOM = (10, 92, 230)
+# 纯色蓝底：App 的 AccentColor 浅色值 (23, 131, 255) 掺 15% 白，稍淡一些；白字标题
+KIMI = (58, 150, 255)
+TITLE = (255, 255, 255)
 
-# (原始截图文件名, 主标题, 副标题)
+# (原始截图文件名, 标题)
 SHOTS = {
     "iphone": [
-        ("chat.png", "随时随地 指挥 Agent", "思考、工具调用、执行结果实时同步"),
-        ("devices.png", "多台电脑 一手掌握", "侧栏切换设备，项目与会话井井有条"),
-        ("model.png", "多款模型 随心切换", "K3 等 Kimi 官方模型，思考强度按需选"),
-        ("usage.png", "上下文与用量 一目了然", "剩余额度随时查看，心里有数"),
-        ("welcome.png", "一行 kimi rc 即可接入", "登录 Kimi 账号，选台电脑就开工"),
+        ("chat.png", "随时随地 指挥 Agent"),
+        ("devices.png", "多台电脑 一手掌握"),
+        ("model.png", "多款模型 随心切换"),
+        ("usage.png", "上下文与用量 一目了然"),
+        ("welcome.png", "一行 kimi rc 即可接入"),
     ],
 }
 SHOTS["ipad"] = SHOTS["iphone"]
 
-# 画布尺寸（App Store Connect 要求）、设备屏幕在画布里的宽度、屏幕圆角（按原始截图像素）、标题字号
+# 输出名 → 用哪组原始截图、画布尺寸（App Store Connect 要求）、设备屏幕在画布里的宽度、
+# 屏幕圆角（按原始截图像素）、标题字号
 DEVICES = {
-    "iphone": dict(canvas=(1284, 2778), screen_w=940, corner=168, bezel=26, title=107, sub=51),
-    "ipad": dict(canvas=(2064, 2752), screen_w=1500, corner=72, bezel=40, title=132, sub=64),
+    # iPhone 6.5 英寸栏
+    "iphone": dict(raw="iphone", canvas=(1284, 2778), screen_w=984, corner=168, bezel=26, title=107),
+    # iPhone 6.1 / 6.3 英寸栏（只收 1206×2622 或 1179×2556）
+    "iphone-6.3": dict(raw="iphone", canvas=(1206, 2622), screen_w=924, corner=168, bezel=24, title=100),
+    # iPad 13 英寸栏
+    "ipad": dict(raw="ipad", canvas=(2064, 2752), screen_w=1584, corner=72, bezel=40, title=132),
 }
 
 
@@ -41,20 +47,8 @@ def font(size, index):
     return ImageFont.truetype(PINGFANG, size, index=index)
 
 
-def gradient(size):
-    w, h = size
-    top, bottom = KIMI_TOP, KIMI_BOTTOM
-    col = Image.new("RGB", (1, h))
-    for y in range(h):
-        t = y / (h - 1)
-        col.putpixel((0, y), tuple(round(a + (b - a) * t) for a, b in zip(top, bottom)))
-    bg = col.resize((w, h))
-    # 顶部一团柔光，别让大色块太平
-    glow = Image.new("L", (w, h), 0)
-    ImageDraw.Draw(glow).ellipse((-w * 0.3, -h * 0.25, w * 1.3, h * 0.35), fill=70)
-    glow = glow.filter(ImageFilter.GaussianBlur(w * 0.15))
-    bg.paste(Image.new("RGB", (w, h), (255, 255, 255)), (0, 0), glow)
-    return bg
+def background(size):
+    return Image.new("RGB", size, KIMI)
 
 
 def rounded_mask(size, radius):
@@ -82,18 +76,16 @@ def compose(kind, raw_dir, out_dir):
     spec = DEVICES[kind]
     cw, ch = spec["canvas"]
     title_font = font(spec["title"], SC_SEMIBOLD)
-    sub_font = font(spec["sub"], SC_REGULAR)
-    for i, (name, title, subtitle) in enumerate(SHOTS[kind], 1):
-        canvas = gradient((cw, ch)).convert("RGBA")
+    for i, (name, title) in enumerate(SHOTS[spec["raw"]], 1):
+        canvas = background((cw, ch)).convert("RGBA")
         draw = ImageDraw.Draw(canvas)
         title_y = round(ch * 0.075)
-        draw.text((cw / 2, title_y), title, font=title_font, fill="white", anchor="mt")
-        sub_y = title_y + title_font.size + round(ch * 0.018)
-        draw.text((cw / 2, sub_y), subtitle, font=sub_font, fill=(255, 255, 255, 215), anchor="mt")
+        # 苹方最粗就是 Semibold；别用描边假加粗，笔画端头会变圆、发糊
+        draw.text((cw / 2, title_y), title, font=title_font, fill=TITLE, anchor="mt")
 
         device = framed(Image.open(raw_dir / name), spec["screen_w"], spec["corner"], spec["bezel"])
         x = (cw - device.width) // 2
-        y = sub_y + sub_font.size + round(ch * 0.04)
+        y = title_y + title_font.size + round(ch * 0.045)
         # 阴影
         shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
         ImageDraw.Draw(shadow).rounded_rectangle(
@@ -110,9 +102,9 @@ def compose(kind, raw_dir, out_dir):
 def main():
     raw_dir, out_dir = Path(sys.argv[1]), Path(sys.argv[2])
     out_dir.mkdir(parents=True, exist_ok=True)
-    for kind in DEVICES:
-        if (raw_dir / kind).is_dir():
-            compose(kind, raw_dir / kind, out_dir)
+    for kind, spec in DEVICES.items():
+        if (raw_dir / spec["raw"]).is_dir():
+            compose(kind, raw_dir / spec["raw"], out_dir)
 
 
 if __name__ == "__main__":
