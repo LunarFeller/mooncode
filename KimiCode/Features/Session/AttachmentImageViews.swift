@@ -6,7 +6,6 @@ struct RemoteAttachmentImage: View {
     let attachment: AttachmentRef
     let number: Int
     let load: @MainActor (AttachmentRef) async throws -> Data
-    @State private var data: Data?
     @State private var thumbnail: UIImage?
     @State private var failed = false
     @State private var attempt = 0
@@ -40,7 +39,6 @@ struct RemoteAttachmentImage: View {
         .accessibilityLabel(failed ? "重试图片 \(number)" : "预览图片 \(number)")
         .task(id: "\(attachment.id):\(attachment.source?.cacheKey ?? "none"):\(attempt)") {
             failed = false
-            data = nil
             thumbnail = nil
             do {
                 let bytes = try await load(attachment)
@@ -49,14 +47,13 @@ struct RemoteAttachmentImage: View {
                     failed = true
                     return
                 }
-                data = bytes
                 thumbnail = image
             } catch {
                 if !Task.isCancelled { failed = true }
             }
         }
         .sheet(isPresented: $showsPreview) {
-            if let data { AttachmentImagePreview(data: data) }
+            AttachmentImagePreview(load: { try await load(attachment) })
         }
     }
 }
@@ -168,15 +165,32 @@ private enum AttachmentImageThumbnail {
 }
 
 private struct AttachmentImagePreview: View {
-    let data: Data
+    private let data: Data?
+    private let load: (@MainActor () async throws -> Data)?
+    @State private var loadedData: Data?
+    @State private var errorMessage: String?
+    @State private var attempt = 0
     @Environment(\.dismiss) private var dismiss
+
+    init(data: Data) { self.data = data; load = nil }
+    init(load: @escaping @MainActor () async throws -> Data) { data = nil; self.load = load }
 
     var body: some View {
         NavigationStack {
             Group {
-                if let image = UIImage(data: data) {
-                    Image(uiImage: image).resizable().scaledToFit()
-                } else { ContentUnavailableView("图片不可预览", systemImage: "photo") }
+                if let bytes = data ?? loadedData {
+                    if let image = UIImage(data: bytes) {
+                        Image(uiImage: image).resizable().scaledToFit()
+                    } else { ContentUnavailableView("图片不可预览", systemImage: "photo") }
+                } else if let errorMessage {
+                    ContentUnavailableView {
+                        Label("图片加载失败", systemImage: "photo.badge.exclamationmark")
+                    } description: {
+                        Text(errorMessage)
+                    } actions: {
+                        Button("重试") { attempt += 1 }
+                    }
+                } else { ProgressView("正在加载图片") }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding()
@@ -185,6 +199,17 @@ private struct AttachmentImagePreview: View {
             .toolbar { ToolbarItem(placement: .topBarTrailing) {
                 Button("关闭") { dismiss() }.accessibilityLabel("关闭图片预览")
             } }
+            .task(id: attempt) {
+                guard let load else { return }
+                errorMessage = nil
+                do {
+                    let bytes = try await load()
+                    try Task.checkCancellation()
+                    loadedData = bytes
+                } catch {
+                    if !Task.isCancelled { errorMessage = error.localizedDescription }
+                }
+            }
         }
     }
 }

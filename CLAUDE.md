@@ -79,6 +79,8 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 
 对话图片按 transcript 的 `attachmentId` 区分，保留 `source`，从鉴权的 `/files/{id}` 或
 `/sessions/{sessionId}/media/{fileId}` 读取缩略图并支持点击预览；同名图片不能合并。
+远程气泡只保留缩略图，点击预览才取原图；原始字节使用有成本限额的缓存。
+下载前检查已知响应长度，未知长度最多累计 9 MiB，超限立即取消，不能先完整下载再拒绝。
 聊天气泡缩略图采用 74pt 外框（图片内容 72pt），右下角显示从 1 开始的序号；空间不足按顺序换行。
 纯图片的气泡按缩略图内容收紧，发送中 / 失败消息采用相同布局。
 乐观消息通过提交返回的 `prompt_id` / `user_message_id` 与 turn 的 `triggerPromptId` 核对清理，
@@ -414,7 +416,7 @@ SIMCTL_CHILD_KIMI_DEBUG_REFRESH_TOKEN="$(python3 -c "import json;print(json.load
 - **停止走 REST `:abort`，不走 WS `abort`** —— 与网页端一致。
 - **草稿会话。** 在文件夹旁点 + 不会立刻建会话，第一条消息发出时才 `POST /sessions`，
   避免空会话污染侧栏。
-- **乐观发送。** 用户消息先本地显示，失败给"重试/丢弃"，成功后由正文里的真实消息顶替（按文本去重）。
+- **乐观发送。** 用户消息先本地显示，失败保留原始附件并给"重试/丢弃"，成功后按提交返回的消息 ID 与 turn 的 `triggerPromptId` 核对，由正文里的真实消息顶替。
 - **正文只订阅主 agent**（`agent_id=main`），子 agent 的留给 task 面板。
 
 ### 下一步（尚未实现）
@@ -425,7 +427,7 @@ SIMCTL_CHILD_KIMI_DEBUG_REFRESH_TOKEN="$(python3 -c "import json;print(json.load
 4. 新建会话的目录选择（`/fs:browse`、`/workspaces`）
 5. 待确认时的本地通知（`UNUserNotificationCenter`）、长任务 Live Activity
 6. 对话流里官方有、这版还没搬的：每轮「N 个文件已修改」（`/file-history/changes`）、Agent / Todo / Plan 等专用工具卡、
-   用户消息里的图片缩略图、代码语法高亮
+   代码语法高亮
 
 ## 7. 参考位置
 

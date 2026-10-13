@@ -184,6 +184,7 @@ struct KapClient: Sendable {
             if value.scheme == "data" {
                 let parts = value.absoluteString.split(separator: ",", maxSplits: 1)
                 guard parts.count == 2, parts[0].hasPrefix("data:image/"), parts[0].hasSuffix(";base64"),
+                      parts[1].utf8.count <= ((Attachment.maxUploadBytes + 2) / 3) * 4,
                       let data = Data(base64Encoded: String(parts[1])), data.count <= Attachment.maxUploadBytes
                 else { throw KapError.api(code: -1, message: "图片格式不可预览。") }
                 return data
@@ -201,12 +202,22 @@ struct KapClient: Sendable {
         if authenticated, let token = await tokenProvider() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        let (data, response) = try await session.data(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
+        // 提前拒绝已知长度的大图；无长度响应也不能先完整下载再检查。
+        defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw KapError.api(code: -1, message: "图片加载失败，请重试。")
         }
-        guard data.count <= Attachment.maxUploadBytes else {
+        guard response.expectedContentLength <= Attachment.maxUploadBytes else {
             throw KapError.api(code: -1, message: "图片过大，无法预览。")
+        }
+        var data = Data()
+        data.reserveCapacity(Int(max(0, response.expectedContentLength)))
+        for try await byte in bytes {
+            guard data.count < Attachment.maxUploadBytes else {
+                throw KapError.api(code: -1, message: "图片过大，无法预览。")
+            }
+            data.append(byte)
         }
         return data
     }
