@@ -142,6 +142,9 @@ struct KapClient: Sendable {
     /// 上传附件：multipart `file` + `name`，与网页端 `uploadFile` 一致。
     /// 走隧道的 HTTP 单请求上限 10 MiB，调用方先挡掉过大的文件。
     func uploadFile(_ data: Data, name: String, mediaType: String) async throws -> UploadedFile {
+        guard data.count <= Attachment.maxUploadBytes else {
+            throw KapError.api(code: -1, message: "「\(name)」超过 9 MB，远程控制传不了这么大的附件。")
+        }
         let boundary = "kimi-\(UUID().uuidString)"
         var body = Data()
         func append(_ string: String) { body.append(Data(string.utf8)) }

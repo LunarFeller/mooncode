@@ -68,7 +68,9 @@ final class ChatModel {
     struct OptimisticPrompt: Identifiable, Sendable {
         let id = UUID()
         let text: String
-        let attachmentCount: Int
+        /// 发送失败后重试需要原始附件；正文确认收到后随乐观消息一起释放。
+        let attachments: [Attachment]
+        var attachmentCount: Int { attachments.count }
         var failed = false
     }
 
@@ -407,9 +409,13 @@ final class ChatModel {
         let pending = attachments
         guard !trimmed.isEmpty || !pending.isEmpty, !isWorking else { return }
 
-        let optimistic = OptimisticPrompt(text: trimmed, attachmentCount: pending.count)
+        let optimistic = OptimisticPrompt(text: trimmed, attachments: pending)
         optimisticPrompts.append(optimistic)
         attachments = []
+        await submit(optimistic)
+    }
+
+    private func submit(_ optimistic: OptimisticPrompt) async {
         isSending = true
         defer { isSending = false }
 
@@ -426,18 +432,20 @@ final class ChatModel {
                 await start()
             }
             guard let sessionID else { return }
-            var images: [Data] = []
+            var images: [UploadedFile] = []
             var files: [UploadedFile] = []
-            for attachment in pending {
+            for attachment in optimistic.attachments {
                 switch attachment {
-                case let .image(_, jpeg, _):
-                    images.append(jpeg)
+                case let .image(id, jpeg, _):
+                    images.append(try await client.uploadFile(
+                        jpeg, name: "image-\(id.uuidString).jpg", mediaType: "image/jpeg"
+                    ))
                 case let .file(_, name, mediaType, data):
                     files.append(try await client.uploadFile(data, name: name, mediaType: mediaType))
                 }
             }
             _ = try await client.sendPrompt(
-                .make(text: trimmed, images: images, files: files, config: config.patch),
+                .make(text: optimistic.text, images: images, files: files, config: config.patch),
                 to: sessionID
             )
             holdsLocalConfig = false
@@ -457,8 +465,10 @@ final class ChatModel {
     }
 
     func retry(_ prompt: OptimisticPrompt) async {
-        optimisticPrompts.removeAll { $0.id == prompt.id }
-        await send(prompt.text)
+        guard !isWorking,
+              let index = optimisticPrompts.firstIndex(where: { $0.id == prompt.id && $0.failed }) else { return }
+        optimisticPrompts[index].failed = false
+        await submit(optimisticPrompts[index])
     }
 
     func discard(_ prompt: OptimisticPrompt) {
