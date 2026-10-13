@@ -716,6 +716,36 @@ struct PlanUsage: Decodable, Sendable {
 
 // MARK: - 附件
 
+/// transcript 的图片来源；历史图片通过会话媒体接口读取。
+enum AttachmentSource: Hashable, Sendable {
+    case file(String)
+    case sessionMedia(String)
+    case url(URL)
+
+    init?(_ value: JSONValue?) {
+        switch value?["kind"]?.stringValue {
+        case "file":
+            guard let id = value?["fileId"]?.stringValue else { return nil }
+            self = .file(id)
+        case "session_media":
+            guard let id = value?["fileId"]?.stringValue else { return nil }
+            self = .sessionMedia(id)
+        case "url":
+            guard let raw = value?["url"]?.stringValue, let url = URL(string: raw) else { return nil }
+            self = .url(url)
+        default: return nil
+        }
+    }
+
+    var cacheKey: String {
+        switch self {
+        case let .file(id): "file:\(id)"
+        case let .sessionMedia(id): "media:\(id)"
+        case let .url(url): "url:\(url.absoluteString)"
+        }
+    }
+}
+
 /// composer 里待发送的附件。图片和文件均在发送时先上传。
 enum Attachment: Identifiable, Sendable {
     /// 给 multipart 与隧道 HTTP 头留出余量（隧道单请求上限 10 MiB）。

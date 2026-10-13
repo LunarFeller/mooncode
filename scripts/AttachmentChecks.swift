@@ -15,9 +15,11 @@ private actor AttachmentCheckClient: KapServicing {
     var failNextPrompt = false
     var failUploadAt: Int?
     var uploadAttempts = 0
+    var beforeResponse: (@Sendable () async -> Void)?
 
     func failPromptOnce() { failNextPrompt = true }
     func failUploadOnce(at attempt: Int) { failUploadAt = attempt }
+    func echoBeforeResponse(_ callback: @escaping @Sendable () async -> Void) { beforeResponse = callback }
 
     func uploadFile(_ data: Data, name: String, mediaType: String) async throws -> UploadedFile {
         uploadAttempts += 1
@@ -36,7 +38,9 @@ private actor AttachmentCheckClient: KapServicing {
             failNextPrompt = false
             throw KapError.api(code: 50001, message: "test prompt failure")
         }
-        return try await base.sendPrompt(body, to: sessionID)
+        let accepted = try await base.sendPrompt(body, to: sessionID)
+        if let callback = beforeResponse { beforeResponse = nil; await callback() }
+        return accepted
     }
 
     func workspaces() async throws -> [Workspace] { try await base.workspaces() }
@@ -164,6 +168,57 @@ struct AttachmentChecks {
         } catch let KapError.api(code, message) {
             precondition(code == -1 && message.contains("9 MB"))
         }
-        print("PASS: image uploads, bounded prompt JSON, mixed attachments, prompt/upload failure retries, draft isolation and upload size limit")
+
+        // The original image-only bug: an empty prompt needs receipt identity, not text equality.
+        let onlyClient = AttachmentCheckClient()
+        let onlySession = try await onlyClient.createSession(in: workspace, agentConfig: config.patch)
+        let onlyChat = makeChat(onlyClient, session: onlySession)
+        defer { onlyChat.stop() }
+        onlyChat.attachments = [image, image]
+        await onlyChat.send("")
+        precondition(onlyChat.optimisticPrompts.count == 1)
+        await onlyChat.reload()
+        precondition(onlyChat.optimisticPrompts.isEmpty, "Accepted image-only bubble must disappear")
+        let userImages = onlyChat.entries.compactMap { entry -> UserEntry? in
+            if case let .user(user) = entry.kind { return user }
+            return nil
+        }
+        precondition(userImages.count == 1 && userImages[0].text.isEmpty && userImages[0].attachments.count == 2)
+        precondition(Set(userImages[0].attachments.map(\.id)).count == 2, "Same filenames must keep distinct image identities")
+        precondition(userImages[0].attachments.allSatisfy { $0.source != nil })
+
+        // A historical identical message must not swallow the current pending bubble.
+        let repeatedClient = AttachmentCheckClient()
+        let repeatedSession = try await repeatedClient.createSession(in: workspace, agentConfig: config.patch)
+        let repeatedChat = makeChat(repeatedClient, session: repeatedSession)
+        defer { repeatedChat.stop() }
+        await repeatedChat.send("repeat")
+        await repeatedChat.reload()
+        await repeatedChat.abort()
+        await repeatedChat.reload()
+        await repeatedChat.send("repeat")
+        precondition(repeatedChat.optimisticPrompts.count == 1, "Old text cannot acknowledge a new submission")
+        await repeatedChat.reload()
+        precondition(repeatedChat.optimisticPrompts.isEmpty)
+
+        // WS echo can arrive before HTTP acceptance; reconcile again when the receipt arrives.
+        let raceClient = AttachmentCheckClient()
+        let raceSession = try await raceClient.createSession(in: workspace, agentConfig: config.patch)
+        let raceChat = makeChat(raceClient, session: raceSession)
+        defer { raceChat.stop() }
+        await raceClient.echoBeforeResponse { await raceChat.reload() }
+        raceChat.attachments = [image]
+        await raceChat.send("")
+        precondition(raceChat.optimisticPrompts.isEmpty)
+
+        let mediaSource = AttachmentSource(.object(["kind": .string("session_media"), "fileId": .string("f_photo")]))
+        precondition(mediaSource == .sessionMedia("f_photo"))
+        let inline = try await realClient.attachmentData(.url(URL(string: "data:image/png;base64,AQID")!), sessionID: "test")
+        precondition(inline == Data([1, 2, 3]))
+        do {
+            _ = try await realClient.attachmentData(.url(URL(string: "file:///tmp/not-an-image")!), sessionID: "test")
+            preconditionFailure("Local file URL must not be loaded from a transcript")
+        } catch {}
+        print("PASS: image uploads, bounded JSON, retry preservation, image-only receipt reconciliation, repeated text, echo-before-response, preview sources and unique attachment identities")
     }
 }

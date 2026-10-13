@@ -168,6 +168,49 @@ struct KapClient: Sendable {
         return try decodeEnvelope(responseData, status: (response as? HTTPURLResponse)?.statusCode ?? 0, path: "files")
     }
 
+    /// 读取图片；会话媒体和上传文件需要当前登录凭证。
+    func attachmentData(_ source: AttachmentSource, sessionID: String) async throws -> Data {
+        let url: URL
+        let authenticated: Bool
+        switch source {
+        case let .file(id):
+            url = endpoint.apiBaseURL.appending(path: "files").appendingPathComponent(id)
+            authenticated = true
+        case let .sessionMedia(id):
+            url = endpoint.apiBaseURL.appending(path: "sessions").appendingPathComponent(sessionID)
+                .appending(path: "media").appendingPathComponent(id)
+            authenticated = true
+        case let .url(value):
+            if value.scheme == "data" {
+                let parts = value.absoluteString.split(separator: ",", maxSplits: 1)
+                guard parts.count == 2, parts[0].hasPrefix("data:image/"), parts[0].hasSuffix(";base64"),
+                      let data = Data(base64Encoded: String(parts[1])), data.count <= Attachment.maxUploadBytes
+                else { throw KapError.api(code: -1, message: "图片格式不可预览。") }
+                return data
+            }
+            guard value.scheme == "https" || value.scheme == "http" else {
+                throw KapError.api(code: -1, message: "图片地址不可预览。")
+            }
+            url = value
+            // 外部图片地址不携带 Kimi 登录凭证。
+            authenticated = value.scheme == endpoint.baseURL.scheme && value.host == endpoint.baseURL.host
+                && value.port == endpoint.baseURL.port && value.path.hasPrefix(endpoint.apiBaseURL.path + "/")
+        }
+        var request = URLRequest(url: url)
+        request.setValue("image/*", forHTTPHeaderField: "Accept")
+        if authenticated, let token = await tokenProvider() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw KapError.api(code: -1, message: "图片加载失败，请重试。")
+        }
+        guard data.count <= Attachment.maxUploadBytes else {
+            throw KapError.api(code: -1, message: "图片过大，无法预览。")
+        }
+        return data
+    }
+
     /// 停止当前 turn（网页端的停止按钮走的就是它）。
     func abort(_ sessionID: String) async throws {
         struct Empty: Encodable {}
