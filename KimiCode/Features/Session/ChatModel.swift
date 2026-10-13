@@ -2,10 +2,11 @@ import Foundation
 import Observation
 import UIKit
 
-/// composer 上那一排的选择：权限模式 / 模型 / 思考强度。新会话会继承上一次的选择。
+/// composer 上那一排的选择：权限模式 / 模型 / 思考。新会话会继承上一次的选择。
 struct ComposerConfig: Codable, Equatable, Sendable {
     var permission: PermissionMode
     var modelID: String?
+    /// 请求里的 `thinking`：强度名（`low`…）或 `on` / `off`。字段名沿用旧的，免得丢掉已存的选择。
     var effort: String?
 
     var patch: AgentConfigPatch {

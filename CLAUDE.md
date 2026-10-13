@@ -65,10 +65,10 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 | 退出登录 | 本地清凭证 | alert「是否退出登录？」→ 取消 / 退出 |
 | 权限图标 | `GET /sessions/{id}/status` 的 `permission` | composer 上只显示图标（hand.raised / checkmark.shield / bolt.shield），文字只在菜单里。**标签映射别弄反**：`manual`=始终询问、`yolo`=必要时询问、`auto`=完全自动 |
 | 右上角 ⋯ 面板 | 上：`/status` 的 `context_usage`（同心圆 + 已使用 x%；输入框上不再放上下文圈）；下：`GET /oauth/usage` → `quota.usages.{limit5h,limit7d,monthTotal}`，显示**剩余** `1 - usedRatio` | 按 5 小时 → 每周 → 每月 顺序显示存在的项（实测这个账号是 5 小时 + 每月）。打开时刷新 |
-| K3·Low | 同上 `model` + `thinking_level`；名字查 `GET /models` 的 `display_name`，可选强度查 `support_efforts` | 模型不支持强度时只显示名字 |
-| 模型菜单 | `GET /models` 里 **只取 `provider == "managed:kimi-code"`**（网页端叫「Kimi 订阅」组） | 产品要求：App 只提供 Kimi 官方订阅的模型，opencode-go 等其它 provider 不列。已有会话若用着别的模型，标签照实显示，但菜单里只能换成 Kimi 的 |
+| K3·Low | 同上 `model` + `thinking_level`；名字查 `GET /models` 的 `display_name`，可选强度查 `support_efforts` | `thinking` 取值是强度名或 `on`/`off`；只有一个选项（如恒开无强度）时只显示名字，`off` 显示「Off」 |
+| 模型菜单 | `GET /models` 全部列出，按 provider 分组（`managed:kimi-code` 组名「Kimi 订阅」排最前，其他照原 id 显示，同网页端） | 第三方模型（deepseek 等）由电脑上的 config 配置，App 只选不管：不做 provider 增删、不碰 API Key。思考选项照网页端 `ov`/`sv`/`z1`：`always_thinking`+强度 → 选强度；只有 `thinking` → 开/关；都没有 → 固定 `off`（见 `ModelInfo.thinkingOptions`） |
 | 改权限 / 模型 / 强度 | `POST /sessions/{id}/profile {agent_config:{permission_mode?, model?, thinking?}}` | 只带改动的字段 |
-| 新对话默认值 | 上次的选择（UserDefaults）；第一次：`auto` + `GET /config` 的 `default_model` + 该模型 `default_effort` | 模型不在 Kimi 订阅组里就退到该组第一个。建会话时显式带全，界面显示 == 真实值 |
+| 新对话默认值 | 上次的选择（UserDefaults）；第一次：`auto` + `GET /config` 的 `default_model` + 该模型默认思考（`defaultThinking`） | 模型已不在这台电脑上就退到列表第一个。建会话时显式带全，界面显示 == 真实值。电脑上模型凭证有问题时服务端回 40111/40112/40113（HTTP 200 信封），App 提示去电脑上配置，**不登出** |
 | + 菜单：图片 | prompt 的 `{type:"image", source:{kind:"base64", media_type, data}}` | 长边缩到 1600px JPEG（隧道单请求 10 MiB 上限）；模型无 `image_in` 时禁用 |
 | + 菜单：文件 | 先 multipart `POST /files`（字段 `file`+`name`）→ `{id,name,media_type,size}`，再发 `{type:"file", file_id, name, media_type, size}` | 与网页端 `uploadFile` 同形；选中时读进内存，发送时上传；单文件上限 9 MB |
 | ↑ / ■ | `POST /sessions/{id}/prompts`（每条都带 `model / thinking / permission_mode`，与网页端 `submitPrompt` 同形）；停止 `POST /sessions/{id}:abort {}` | **不做排队**：本轮在跑时只显示 ■，不能再发。也不做斜杠命令 |

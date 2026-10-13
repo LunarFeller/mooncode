@@ -541,10 +541,12 @@ private enum DemoData {
     static let models: [ModelInfo] = decode("""
         [
           {"provider":"managed:kimi-code","model":"kimi-code/k3","display_name":"K3",\
-        "max_context_size":262144,"capabilities":["image_in"],\
+        "max_context_size":262144,"capabilities":["thinking","always_thinking","image_in","tool_use"],\
         "support_efforts":["low","medium","high"],"default_effort":"low"},
           {"provider":"managed:kimi-code","model":"kimi-code/k2.5","display_name":"K2.5",\
-        "max_context_size":131072,"capabilities":["image_in"]}
+        "max_context_size":131072,"capabilities":["thinking","always_thinking","image_in","tool_use"]},
+          {"provider":"my-provider","model":"my-provider/my-model","display_name":"My Model",\
+        "max_context_size":131072,"capabilities":["thinking","tool_use"]}
         ]
         """)
 

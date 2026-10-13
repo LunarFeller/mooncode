@@ -618,8 +618,45 @@ struct ModelInfo: Decodable, Identifiable, Hashable, Sendable {
     var name: String { displayName ?? (model as NSString).lastPathComponent }
     var acceptsImages: Bool { capabilities?.contains("image_in") ?? false }
     var efforts: [String] { supportEfforts ?? [] }
-    /// 属于「Kimi 订阅」组。App 只提供这一组，别的 provider（如 opencode-go）一律不列。
+    /// 属于「Kimi 订阅」组（排在最前、组名显示「Kimi 订阅」）。
     var isKimiSubscription: Bool { provider == KimiConfig.kimiSubscriptionProvider }
+    /// 分组名：Kimi 订阅组用中文名，其他 provider 照原样显示（与网页端 `Bl` 一致）。
+    var providerLabel: String { isKimiSubscription ? "Kimi 订阅" : provider }
+
+    /// 思考方式，照网页端 `ov`：`always_thinking` 恒开；有 `thinking` 可开关；都没有则不思考。
+    enum ThinkingKind { case alwaysOn, toggle, unsupported }
+
+    var thinkingKind: ThinkingKind {
+        let caps = capabilities ?? []
+        if caps.contains("always_thinking") { return .alwaysOn }
+        return caps.contains("thinking") ? .toggle : .unsupported
+    }
+
+    /// 可选的 `thinking` 取值，照网页端 `sv`：有强度时是强度（可关的模型前面加 `off`），
+    /// 没强度时是 `on` / `off`。
+    var thinkingOptions: [String] {
+        switch (thinkingKind, efforts.isEmpty) {
+        case (.alwaysOn, false): efforts
+        case (_, false): ["off"] + efforts
+        case (.alwaysOn, true): ["on"]
+        case (.toggle, true): ["on", "off"]
+        case (.unsupported, true): ["off"]
+        }
+    }
+
+    /// 默认 `thinking`，照网页端 `z1`：不支持思考为 `off`；有强度取默认强度（没有就取中间那档）；否则 `on`。
+    var defaultThinking: String {
+        if thinkingKind == .unsupported { return "off" }
+        guard !efforts.isEmpty else { return "on" }
+        if let defaultEffort, efforts.contains(defaultEffort) { return defaultEffort }
+        return efforts[efforts.count / 2]
+    }
+
+    /// 把任意取值落到这个模型支持的选项上（切模型时沿用原选择，不支持就回默认）。
+    func normalizedThinking(_ value: String?) -> String {
+        guard let value, thinkingOptions.contains(value) else { return defaultThinking }
+        return value
+    }
 
     enum CodingKeys: String, CodingKey {
         case provider, model, capabilities
@@ -647,6 +684,15 @@ extension String {
     /// `low` → `Low`，composer 上的「K3·Low」。
     var effortLabel: String {
         prefix(1).uppercased() + dropFirst()
+    }
+
+    /// 模型面板「思考」菜单里的选项名：`on` / `off` 用中文，强度沿用 `Low` / `High` / `Max`。
+    var thinkingOptionLabel: String {
+        switch self {
+        case "on": "开启"
+        case "off": "关闭"
+        default: effortLabel
+        }
     }
 }
 

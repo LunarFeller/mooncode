@@ -254,9 +254,10 @@ struct ComposerView: View {
             ?? "模型"
     }
 
-    /// 「 Max」：模型不支持强度时为空。
+    /// 「 Max」/「 Off」：只有能选的模型才显示；开着思考但没强度可选（`on`）时为空。
     private var effortSuffix: String {
-        guard let effort = chat.config.effort, currentModel?.efforts.isEmpty == false else { return "" }
+        guard let effort = chat.config.effort, effort != "on",
+              let model = currentModel, model.thinkingOptions.count > 1 else { return "" }
         return " \(effort.effortLabel)"
     }
 
