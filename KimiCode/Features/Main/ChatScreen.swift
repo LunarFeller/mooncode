@@ -144,8 +144,6 @@ private struct ChatContent: View {
                 .padding(.horizontal)
                 .padding(.top, 12)
                 .padding(.bottom, 24)
-                // 走 ScrollPosition 而不是 ScrollViewReader：后者的跳转不吃 withAnimation，会一帧闪过去。
-                .environment(\.revealInTranscript) { id, anchor in scrollPosition.scrollTo(id: id, anchor: anchor) }
             }
             .overlay {
                 // 新对话还没发任何东西：中间放欢迎语。

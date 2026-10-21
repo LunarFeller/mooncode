@@ -363,6 +363,8 @@ xcodebuild -project KimiCode.xcodeproj -scheme KimiCode -sdk iphonesimulator \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -configuration Debug build
 ```
 
+`KimiCode/zh-Hans.lproj/` 不能删：有它系统才认为 App 支持简体中文，选字菜单、相册 / 文件选择器等系统界面才显示中文（开发语言是 en）。
+
 Xcode 26.2 / iOS 26.2 SDK / Swift 6 / deployment target 26.0。模拟器用临时签名（`CODE_SIGN_IDENTITY = "-"`），
 上真机要在 target 里选自己的 Team。
 
@@ -393,10 +395,14 @@ SIMCTL_CHILD_KIMI_DEBUG_REFRESH_TOKEN="$(python3 -c "import json;print(json.load
   UITextView 排版（`Features/Session/SelectableText.swift`），长按选词、拖手柄任意调整。连续的段落 / 标题 / 列表排在同一个视图里可跨段选；
   代码块、表格、引用、分隔线是隔断。长按选词全交给 UITextView 自己，不加自定义手势；只在外面让路：对话页点空白收起键盘时跳过选中的字和手柄附近，选字时横滑不开侧栏。
   取消选择时别立刻改选区（系统会自己藏高亮），否则正在缩回的菜单会跟着滑走；旧选区等动画完再清。
-  表格长按弹系统菜单「拷贝」（`.contextMenu`，制表符分列），代码块用自带复制按钮。思考正文不再点击收起（只点标题）。
+  表格长按弹系统菜单「拷贝」（`.contextMenu`，制表符分列），代码块用自带复制按钮。
   UIKit 读不到 SwiftUI 环境的 `.font` / `.foregroundStyle`，`MarkdownText` 要换字号颜色得传 `tone`。工具输出面板仍是 `.textSelection` 整段拷贝。
 - **样式对齐官方、字号走我们的系统动态字体**：正文 `.body`，工具行 / 思考 / 折叠头 `.subheadline`，元信息 `.caption`；
   颜色 token（用户气泡 #f5f5f5 / #292929、面板 3% 底、diff 绿红、Kimi 蓝）在 `MarkdownText.swift` 的 `Palette`。
+  用户气泡是胶囊（单行）/ 大圆角（多行）、中等字重；下面的复制 / 撤回 / 时间默认收着，点气泡才展开。
+  思考不在正文里展开：进行中是一行「〰 思考中 最新那句」（涂鸦线 `scribble.variable` 用 Draw 效果循环描画；句子放不下时跟着新字往左滚，不可点）；
+  结束后是「〰 已思考 N秒 第一句… ›」（涂鸦线静止），
+  点开从底部弹出全文（标题「思考了 N秒」，左上角 ✕，不透明底）。
 - **新建会话不采纳 `agent_config`**（实测建出来 `model:""`、`permission:manual`）：第一条消息发出前不用 `/status` 覆盖 composer 上的选择，
   空的 model / thinking 不往请求里带（服务端会拒 `thinking: Too small`）。
 - **执行轮数**：`loop_control.max_steps_per_turn` 不设或为 0 都是不限（`maxSteps > 0` 才限制），是电脑上的全局配置，App 不去改。

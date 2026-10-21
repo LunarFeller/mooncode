@@ -297,9 +297,14 @@ enum RichText: Equatable {
 struct TextTone: Equatable {
     var textStyle: UIFont.TextStyle = .body
     var secondary = false
+    var weight: UIFont.Weight = .regular
 
     static let body = TextTone()
 
-    var font: UIFont { .preferredFont(forTextStyle: textStyle) }
+    var font: UIFont {
+        let base = UIFont.preferredFont(forTextStyle: textStyle)
+        return weight == .regular ? base : .systemFont(ofSize: base.pointSize, weight: weight)
+    }
+
     var color: UIColor { secondary ? .secondaryLabel : .label }
 }
