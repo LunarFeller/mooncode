@@ -448,7 +448,7 @@ struct QuestionCard: View {
                         Text(question.question)
                             .font(.body.weight(.medium))
                         if let body = question.body, !body.isEmpty {
-                            MarkdownText(text: body)
+                            MarkdownText(text: body, tone: TextTone(textStyle: .subheadline, secondary: true))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }

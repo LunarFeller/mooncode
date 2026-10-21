@@ -5,58 +5,65 @@ import UIKit
 ///
 /// 块级（段落 / 标题 / 列表 / 引用 / 代码块 / 表格 / 分隔线）自己切，行内（粗体 / 行内代码 /
 /// 链接）交给 `AttributedString(markdown:)`。流式输出时每次全量重排，只要切块是纯函数就不会闪。
+///
+/// 正文可以长按自由选择（见 `SelectableText`）：连续的段落 / 标题 / 列表排在同一个文本视图里，能跨段连着选；
+/// 代码块、表格、引用、分隔线把它们隔开，选区到这儿就停。
 struct MarkdownText: View {
     let text: String
+    /// 正文的基础字号 / 颜色。可选文本是 UIKit 排的，读不到外面的 `.font` / `.foregroundStyle`。
+    var tone: TextTone = .body
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in
-                view(for: block)
+            ForEach(Array(Self.runs(MarkdownBlock.parse(text)).enumerated()), id: \.offset) { _, run in
+                view(for: run)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private func view(for block: MarkdownBlock) -> some View {
-        switch block {
-        case let .paragraph(text):
-            Text(Self.inline(text))
-                .lineSpacing(4)
-                .textSelection(.enabled)
-        case let .heading(level, text):
-            Text(Self.inline(text))
-                .font(level <= 1 ? .title3.weight(.semibold) : level == 2 ? .headline : .subheadline.weight(.semibold))
-                .padding(.top, 4)
-                .textSelection(.enabled)
-        case let .list(items, ordered):
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(ordered ? "\(index + 1)." : "•")
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                        Text(Self.inline(item.text))
-                            .lineSpacing(4)
-                            .textSelection(.enabled)
-                    }
-                    .padding(.leading, CGFloat(item.indent) * 16)
-                }
+    private enum Run {
+        /// 连续的段落 / 标题 / 列表。
+        case prose([MarkdownBlock])
+        case block(MarkdownBlock)
+    }
+
+    private static func runs(_ blocks: [MarkdownBlock]) -> [Run] {
+        var runs: [Run] = []
+        var prose: [MarkdownBlock] = []
+        for block in blocks {
+            switch block {
+            case .paragraph, .heading, .list:
+                prose.append(block)
+            case .quote, .code, .table, .rule:
+                if !prose.isEmpty { runs.append(.prose(prose)) }
+                prose = []
+                runs.append(.block(block))
             }
-        case let .quote(text):
+        }
+        if !prose.isEmpty { runs.append(.prose(prose)) }
+        return runs
+    }
+
+    @ViewBuilder
+    private func view(for run: Run) -> some View {
+        switch run {
+        case let .prose(blocks):
+            SelectableText(content: .markdown(blocks, tone: tone))
+        case let .block(.quote(text)):
             HStack(spacing: 10) {
                 Rectangle().fill(Palette.line).frame(width: 3)
-                Text(Self.inline(text))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+                SelectableText(content: .markdown([.paragraph(text)], tone: TextTone(textStyle: tone.textStyle, secondary: true)))
             }
             .fixedSize(horizontal: false, vertical: true)
-        case let .code(language, code):
+        case let .block(.code(language, code)):
             CodeBlockView(language: language, code: code)
-        case let .table(rows):
+        case let .block(.table(rows)):
             MarkdownTable(rows: rows)
-        case .rule:
+        case .block(.rule):
             Rectangle().fill(Palette.line).frame(height: 0.5).padding(.vertical, 4)
+        case .block:
+            EmptyView()
         }
     }
 
@@ -237,7 +244,6 @@ struct CodeBlockView: View {
                 Text(code)
                     .font(.footnote.monospaced())
                     .lineSpacing(3)
-                    .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
@@ -249,6 +255,9 @@ struct CodeBlockView: View {
 
 private struct MarkdownTable: View {
     let rows: [[String]]
+
+    /// 长按弹出「拷贝」时整张表淡淡地高亮，和选中文字一个颜色。
+    @State private var isCopyMenuShown = false
 
     /// 按每列最长的内容估一个列宽（60…240pt），超出的在格子里换行。
     private var widths: [CGFloat] {
@@ -281,9 +290,16 @@ private struct MarkdownTable: View {
                     }
                 }
             }
+            .background(Palette.kimi.opacity(isCopyMenuShown ? 0.12 : 0), in: .rect(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.line, lineWidth: 0.5))
             .padding(0.5)
         }
+        // 表格不进正文的连续选区，长按整张拷贝（制表符分列，粘到表格软件里也能对上）。
+        .gesture(CopyMenuGesture(text: { [rows] in
+            rows.map { row in
+                row.map { String(MarkdownText.inline($0).characters) }.joined(separator: "\t")
+            }.joined(separator: "\n")
+        }, onMenuShown: { isCopyMenuShown = $0 }))
     }
 }
 
@@ -293,8 +309,9 @@ private struct MarkdownTable: View {
 enum Palette {
     static let userBubble = dynamic(light: 0xF5F5F5, dark: 0x292929)
     /// `--color-fill-1`：工具面板、代码块底色。
-    static let fill = Color(UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(white: 1, alpha: 0.05) : UIColor(white: 0, alpha: 0.03) })
+    static let fill = Color(uiFill)
+    static let uiFill = UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(white: 1, alpha: 0.05) : UIColor(white: 0, alpha: 0.03) }
     static let line = Color(UIColor { $0.userInterfaceStyle == .dark
         ? UIColor(white: 1, alpha: 0.12) : UIColor(white: 0, alpha: 0.13) })
     static let danger = dynamic(light: 0xC0392B, dark: 0xF85149)
@@ -304,6 +321,7 @@ enum Palette {
     static let diffAdd = dynamic(light: 0x16C456, dark: 0x16C456)
     static let diffDel = dynamic(light: 0xFF4756, dark: 0xFF4756)
     static let kimi = Color("AccentColor")
+    static let uiKimi = UIColor(named: "AccentColor") ?? .tintColor
 
     private static func dynamic(light: UInt32, dark: UInt32) -> Color {
         Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) })

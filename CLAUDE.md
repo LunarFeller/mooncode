@@ -389,6 +389,10 @@ SIMCTL_CHILD_KIMI_DEBUG_REFRESH_TOKEN="$(python3 -c "import json;print(json.load
   确认 / 提问走 REST pending 列表（`/approvals?status=pending`、`/questions?status=pending`），有 `interaction.upsert` 或相关事件时重拉。
 - **确认卡片的类型映射照搬网页端 `PJ`**：`command → shell`、`file_io`（write→file / edit→diff / 其他→fileop）、
   `url_fetch → url`、`agent_call / skill_call → invocation`、`todo_list → todo`、`plan_review`。
+- **正文原地自由选择**：iOS 上 `Text` 的 `.textSelection` 长按只能整段拷贝，所以助手 Markdown、用户气泡、思考段落改用不可编辑的
+  UITextView 排版（`Features/Session/SelectableText.swift`），长按选词、拖手柄任意调整。连续的段落 / 标题 / 列表排在同一个视图里可跨段选；
+  代码块、表格、引用、分隔线是隔断。表格长按弹系统小编辑菜单「拷贝」（制表符分列），代码块用自带复制按钮。思考正文不再点击收起（只点标题）。
+  UIKit 读不到 SwiftUI 环境的 `.font` / `.foregroundStyle`，`MarkdownText` 要换字号颜色得传 `tone`。工具输出面板仍是 `.textSelection` 整段拷贝。
 - **样式对齐官方、字号走我们的系统动态字体**：正文 `.body`，工具行 / 思考 / 折叠头 `.subheadline`，元信息 `.caption`；
   颜色 token（用户气泡 #f5f5f5 / #292929、面板 3% 底、diff 绿红、Kimi 蓝）在 `MarkdownText.swift` 的 `Palette`。
 - **新建会话不采纳 `agent_config`**（实测建出来 `model:""`、`permission:manual`）：第一条消息发出前不用 `/status` 覆盖 composer 上的选择，
