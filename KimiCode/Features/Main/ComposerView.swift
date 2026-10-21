@@ -337,6 +337,8 @@ struct ComposerView: View {
 private struct AttachmentStrip: View {
     let chat: ChatModel
 
+    @Environment(\.openFilePreview) private var openFilePreview
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -388,6 +390,20 @@ private struct AttachmentStrip: View {
             .padding(.horizontal, 10)
             .frame(width: 150, height: 56, alignment: .leading)
             .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 12))
+        case let .mention(_, entry):
+            HStack(spacing: 8) {
+                Image(systemName: entry.symbolName)
+                    .foregroundStyle(.secondary)
+                Text(entry.name)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 150, height: 56, alignment: .leading)
+            .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 12))
+            .contentShape(.rect(cornerRadius: 12))
+            .onTapGesture { openFilePreview?(entry) }
         }
     }
 }

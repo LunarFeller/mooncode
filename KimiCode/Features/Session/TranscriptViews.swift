@@ -305,19 +305,35 @@ struct UserTurnView: View {
 private struct FlowAttachments: View {
     let attachments: [AttachmentRef]
 
+    @Environment(\.openFilePreview) private var openFilePreview
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(attachments, id: \.self) { attachment in
-                Label(attachment.name, systemImage: attachment.isImage ? "photo" : "doc")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Palette.fill, in: .capsule)
+                // 文件提及点一下打开预览。
+                if let entry = attachment.previewEntry, let openFilePreview {
+                    Button {
+                        openFilePreview(entry)
+                    } label: {
+                        chip(attachment)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    chip(attachment)
+                }
             }
         }
+    }
+
+    private func chip(_ attachment: AttachmentRef) -> some View {
+        Label(attachment.name, systemImage: attachment.isImage ? "photo" : "doc")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Palette.fill, in: .capsule)
     }
 }
 
@@ -350,15 +366,19 @@ private struct OptimisticPromptRow: View {
     let discard: () -> Void
 
     var body: some View {
+        let split = ConversationBuilder.splitMentions(prompt.text)
         VStack(alignment: .trailing, spacing: 6) {
             VStack(alignment: .leading, spacing: 4) {
+                if !split.mentions.isEmpty {
+                    FlowAttachments(attachments: split.mentions)
+                }
                 if prompt.attachmentCount > 0 {
                     Label("\(prompt.attachmentCount) 个附件", systemImage: "paperclip")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                if !prompt.text.isEmpty {
-                    Text(prompt.text).fontWeight(.medium).lineSpacing(3)
+                if !split.text.isEmpty {
+                    Text(split.text).fontWeight(.medium).lineSpacing(3)
                 }
             }
             .userBubble()

@@ -42,6 +42,14 @@ extension DemoClient: KapServicing {
         DemoData.files(at: path)
     }
 
+    func readFile(_: String, path: String) async throws -> FsContent {
+        try DemoData.readFile(at: path)
+    }
+
+    func downloadFile(_: String, path: String) async throws -> URL {
+        try DemoData.downloadFile(at: path)
+    }
+
     func sessions(pageSize _: Int) async throws -> SessionList {
         await backend.sessions(deviceID: deviceID)
     }
@@ -564,10 +572,63 @@ private enum DemoData {
 
     /// 体验模式会话目录里的假文件树：相对路径 → 子项（名字以 / 结尾的是文件夹）。
     private static let fileTree: [String: [(name: String, size: Int)]] = [
-        ".": [("src/", 3), ("docs/", 1), ("README.md", 1_284), ("package.json", 612), (".gitignore", 48)],
+        ".": [("src/", 3), ("docs/", 2), ("README.md", 1_284), ("package.json", 612), (".gitignore", 48)],
         "src": [("components/", 2), ("main.ts", 2_310), ("utils.ts", 874)],
         "src/components": [("Button.vue", 1_120), ("Header.vue", 1_960)],
-        "docs": [("guide.md", 4_096)],
+        "docs": [("guide.md", 4_096), ("empty.md", 0)],
+    ]
+
+    private static let fileContents: [String: String] = [
+        "README.md": """
+            # Sample Project
+
+            一个演示用的远程工作区。这里的文件内容来自体验模式的内存数据，不会连接任何电脑。
+
+            ## 文件预览
+
+            - 点文件夹可以逐层进入
+            - 点文件可以查看内容
+            - 长按文本可以复制
+            """,
+        "package.json": """
+            {
+              "name": "sample-project",
+              "version": "1.0.0",
+              "private": true,
+              "scripts": {
+                "dev": "vite",
+                "build": "vite build"
+              }
+            }
+            """,
+        ".gitignore": "node_modules/\n.DS_Store\ndist/\n",
+        "src/main.ts": """
+            import { createApp } from 'vue'
+            import App from './App.vue'
+
+            createApp(App).mount('#app')
+            """,
+        "src/utils.ts": """
+            export function greet(name: string): string {
+              return `Hello, ${name}!`
+            }
+            """,
+        "src/components/Button.vue": """
+            <template>
+              <button type="button"><slot /></button>
+            </template>
+            """,
+        "src/components/Header.vue": """
+            <template>
+              <header><h1>Sample Project</h1></header>
+            </template>
+            """,
+        "docs/guide.md": """
+            # 使用指南
+
+            从对话右上角打开文件列表，再选择任意文本文件。
+            """,
+        "docs/empty.md": "",
     ]
 
     static func files(at path: String) -> FsList {
@@ -579,6 +640,28 @@ private enum DemoData {
             return #"{"path":\#(quoted(rel)),"name":\#(quoted(name)),"modified_at":"2026-01-01T00:00:00Z",\#(tail)}"#
         }
         return decode(#"{"items":[\#(items.joined(separator: ","))],"truncated":false}"#)
+    }
+
+    static func readFile(at path: String) throws -> FsContent {
+        let content = try text(at: path)
+        return decode("""
+            {"path":\(quoted(path)),"content":\(quoted(content)),"encoding":"utf-8",\
+            "size":\(content.utf8.count),"truncated":false,"is_binary":false}
+            """)
+    }
+
+    static func downloadFile(at path: String) throws -> URL {
+        let content = try text(at: path)
+        let destination = try PreviewStorage.makeDestination(for: path)
+        try Data(content.utf8).write(to: destination)
+        return destination
+    }
+
+    private static func text(at path: String) throws -> String {
+        guard let content = fileContents[path] else {
+            throw KapError.api(code: KapErrorCode.fileNotFound, message: "文件不存在")
+        }
+        return content
     }
 
     static let fsHome: FsHome = decode("""

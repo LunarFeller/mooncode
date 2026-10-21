@@ -614,13 +614,16 @@ struct FsEntry: Decodable, Identifiable, Hashable, Sendable {
     let kind: Kind
     let size: Int?
     let childCount: Int?
+    let mime: String?
+    let isBinary: Bool?
 
     var id: String { path }
     var isDirectory: Bool { kind == .directory }
 
     enum CodingKeys: String, CodingKey {
-        case path, name, kind, size
+        case path, name, kind, size, mime
         case childCount = "child_count"
+        case isBinary = "is_binary"
     }
 
     init(from decoder: any Decoder) throws {
@@ -630,6 +633,78 @@ struct FsEntry: Decodable, Identifiable, Hashable, Sendable {
         kind = (try? c.decode(Kind.self, forKey: .kind)) ?? .file
         size = try? c.decodeIfPresent(Int.self, forKey: .size)
         childCount = try? c.decodeIfPresent(Int.self, forKey: .childCount)
+        mime = try? c.decodeIfPresent(String.self, forKey: .mime)
+        isBinary = try? c.decodeIfPresent(Bool.self, forKey: .isBinary)
+    }
+}
+
+extension FsEntry {
+    /// 从对话里的文件提及还原：只知道路径和名字，大小等留空（太大时由 `fs:read` 的 41302 兜底）。
+    init(path: String, name: String) {
+        self.path = path
+        self.name = name
+        kind = .file
+        size = nil
+        childCount = nil
+        mime = nil
+        isBinary = nil
+    }
+
+    /// 网页端「提及」文件的写法（`rv`）：`[名字](相对路径)`。名字转义 `% & < > [ ] \` 和换行（`a6`），
+    /// 路径逐段把 ASCII 里非 unreserved 的字符百分号编码，中文等原样保留（`i9e` / `ug`）。
+    var mentionMarkdown: String {
+        let label = name
+            .replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: "&", with: "%26")
+            .replacingOccurrences(of: "<", with: "%3C")
+            .replacingOccurrences(of: ">", with: "%3E")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
+            .replacingOccurrences(of: "\n", with: "%0A")
+            .replacingOccurrences(of: "\r", with: "%0D")
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        func encode(_ segment: Substring) -> String {
+            segment.unicodeScalars.map { scalar in
+                scalar.value > 127 || unreserved.contains(scalar)
+                    ? String(scalar)
+                    : String(format: "%%%02X", scalar.value)
+            }.joined()
+        }
+        var target = (isDirectory && !path.hasSuffix("/") ? path + "/" : path)
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map(encode)
+            .joined(separator: "/")
+        if target.hasPrefix("//") { target = "/%2F" + target.dropFirst(2) }
+        return "[\(label)](\(target))"
+    }
+
+}
+
+/// `POST /sessions/{id}/fs:read`：文件开头的一段文本或 base64。
+struct FsContent: Decodable, Sendable {
+    let path: String
+    let content: String
+    let encoding: String
+    let size: Int
+    let truncated: Bool
+    let mime: String?
+    let isBinary: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case path, content, encoding, size, truncated, mime
+        case isBinary = "is_binary"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        content = try c.decode(String.self, forKey: .content)
+        encoding = try c.decode(String.self, forKey: .encoding)
+        size = try c.decode(Int.self, forKey: .size)
+        truncated = (try? c.decodeIfPresent(Bool.self, forKey: .truncated)) ?? false
+        mime = try? c.decodeIfPresent(String.self, forKey: .mime)
+        isBinary = (try? c.decodeIfPresent(Bool.self, forKey: .isBinary)) ?? false
     }
 }
 
@@ -806,11 +881,14 @@ struct PlanUsage: Decodable, Sendable {
 enum Attachment: Identifiable, Sendable {
     case image(id: UUID = UUID(), jpeg: Data, thumbnail: Data)
     case file(id: UUID = UUID(), name: String, mediaType: String, data: Data)
+    /// 电脑上会话目录里的文件（文件预览「添加到会话」）：不上传，发送时以 `[名字](路径)` 提及写进正文。
+    case mention(id: UUID = UUID(), entry: FsEntry)
 
     var id: UUID {
         switch self {
         case let .image(id, _, _): id
         case let .file(id, _, _, _): id
+        case let .mention(id, _): id
         }
     }
 }

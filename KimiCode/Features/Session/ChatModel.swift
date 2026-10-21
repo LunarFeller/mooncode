@@ -230,8 +230,8 @@ final class ChatModel {
     /// 全量重拉：正文尾部一页 + 待处理的确认/提问 + composer 状态。
     func reload() async {
         guard let sessionID else { return }
-        // 只在屏幕上什么都没有时转圈（打开已有会话的首屏）。草稿发出第一条后建会话再重拉，
-        // 那条消息已经乐观显示着，不该在它上面再冒一个圈。
+        // 只在屏幕上什么都没有时显示骨架屏（打开已有会话的首屏）。草稿发出第一条后建会话再重拉，
+        // 那条消息已经乐观显示着，不该在它上面再冒骨架。
         isLoading = entries.isEmpty && optimisticPrompts.isEmpty
         activeReloads += 1
         defer {
@@ -248,6 +248,8 @@ final class ChatModel {
             async let status = client.status(sessionID)
             transcript = TranscriptState(page: try await page)
             rebuild()
+            // 正文一到就撤骨架：后面的 status / 确认拉取还在路上，不该挡着已到的内容。
+            isLoading = false
             if let seq = transcript.seq { await stream?.noteTranscriptSeq(sessionID, seq: seq) }
             apply(try await status)
             await refreshInteractions()
@@ -335,7 +337,10 @@ final class ChatModel {
             if case let .user(user) = entry.kind { return user.text }
             return nil
         })
-        optimisticPrompts.removeAll { !$0.failed && known.contains($0.text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        // 正文里的文件提及被拆成了附件，比对前乐观那条也要同样拆掉。
+        optimisticPrompts.removeAll {
+            !$0.failed && known.contains(ConversationBuilder.splitMentions($0.text).text)
+        }
         // 这一轮已经跑起来了，或者跑得太快、回复已经落进正文（体验模式轮询时会这样）：空档结束。
         if awaitingTurn, transcript.isTurnActive || (optimisticPrompts.isEmpty && entries.last?.isAssistant == true) {
             setAwaitingTurn(false)
@@ -402,11 +407,30 @@ final class ChatModel {
 
     // MARK: 写
 
+    /// 文件预览「添加到会话」：同一个文件只加一次。
+    func addMention(_ entry: FsEntry) {
+        let exists = attachments.contains {
+            if case let .mention(_, existing) = $0 { return existing.path == entry.path }
+            return false
+        }
+        if !exists { attachments.append(.mention(entry: entry)) }
+    }
+
     /// 发送。不做排队：本轮还在跑时直接忽略（composer 此时只显示「停止」）。
     func send(_ text: String) async {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let pending = attachments
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var pending = attachments
         guard !trimmed.isEmpty || !pending.isEmpty, !isWorking else { return }
+
+        // 文件提及不上传，照网页端写进正文开头。
+        let mentions = pending.compactMap { attachment -> String? in
+            if case let .mention(_, entry) = attachment { return entry.mentionMarkdown }
+            return nil
+        }
+        if !mentions.isEmpty {
+            trimmed = (mentions + (trimmed.isEmpty ? [] : [trimmed])).joined(separator: " ")
+            pending.removeAll { if case .mention = $0 { true } else { false } }
+        }
 
         let optimistic = OptimisticPrompt(text: trimmed, attachmentCount: pending.count)
         optimisticPrompts.append(optimistic)
@@ -435,6 +459,8 @@ final class ChatModel {
                     images.append(jpeg)
                 case let .file(_, name, mediaType, data):
                     files.append(try await client.uploadFile(data, name: name, mediaType: mediaType))
+                case .mention:
+                    break
                 }
             }
             _ = try await client.sendPrompt(

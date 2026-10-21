@@ -54,7 +54,9 @@ struct ChatScreen: View {
                         client: app.client,
                         sessionID: chat.sessionID ?? chat.workspace.flatMap { app.sessions(in: $0).first?.id },
                         title: chat.workspace?.displayName ?? "文件"
-                    )
+                    ) { entry in
+                        chat.addMention(entry)
+                    }
                 }
             }
         }
@@ -125,7 +127,10 @@ struct WelcomeHero<Message: View>: View {
 private struct ChatContent: View {
     let chat: ChatModel
 
+    @Environment(AppModel.self) private var app
     @State private var draft = ""
+    /// 点了对话里的文件提及，正在预览的文件。
+    @State private var previewingFile: FsEntry?
     @State private var ui = TranscriptUIState()
     @State private var undoTarget: UserEntry?
     /// 停在底部时新内容自动跟随（官方 isFollowing）；往上翻了就不打扰。
@@ -138,8 +143,8 @@ private struct ChatContent: View {
                 // 不用 LazyVStack：高度差异大时它估不准，滚到底会落在空白里。
                 // 一页只有 30 轮、折叠的部分本来就不渲染，普通 VStack 足够。
                 VStack(alignment: .leading, spacing: 0) {
-                    if chat.isLoading {
-                        ProgressView().frame(maxWidth: .infinity).padding(.bottom, 16)
+                    if chat.isLoading, chat.entries.isEmpty {
+                        ChatSkeleton()
                     }
 
                     ConversationList(chat: chat, ui: ui) { entry in
@@ -252,6 +257,22 @@ private struct ChatContent: View {
             chat.restoredDraft = nil
         }
         .refreshable { await chat.reload() }
+        .environment(\.openFilePreview) { entry in
+            if fileSessionID != nil { previewingFile = entry }
+        }
+        .sheet(item: $previewingFile) { entry in
+            if let client = app.client, let sessionID = fileSessionID {
+                FilePreviewSheet(client: client, sessionID: sessionID, entry: entry)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+        }
+    }
+
+    /// 读文件用的会话：和右上角 📁 一样，草稿借同文件夹里最近的会话。没有客户端或会话就是 nil。
+    private var fileSessionID: String? {
+        guard app.client != nil else { return nil }
+        return chat.sessionID ?? chat.workspace.flatMap { app.sessions(in: $0).first?.id }
     }
 
     private var isAwaitingInteraction: Bool {
@@ -273,5 +294,46 @@ private struct ChatContent: View {
             guard isFollowing else { return }
             scrollPosition.scrollTo(edge: .bottom)
         }
+    }
+}
+
+/// 打开已有会话首屏加载时的骨架屏：一条右对齐的用户气泡 + 几行助手正文，灰色占位条轻轻呼吸。
+private struct ChatSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // 用户气泡（胶囊）。
+            SkeletonBar(height: 36)
+                .containerRelativeFrame(.horizontal) { width, _ in min(width * 0.55, 220) }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.vertical, 10)
+            // 助手正文三行。
+            VStack(alignment: .leading, spacing: 12) {
+                SkeletonBar(height: 15, fill: Color(.systemGray6))
+                SkeletonBar(height: 15, fill: Color(.systemGray6))
+                    .containerRelativeFrame(.horizontal) { width, _ in width * 0.8 }
+                SkeletonBar(height: 15, fill: Color(.systemGray6))
+                    .containerRelativeFrame(.horizontal) { width, _ in width * 0.45 }
+            }
+            .padding(.vertical, 10)
+        }
+        .phaseAnimator([1.0, 0.45]) { content, opacity in
+            content.opacity(opacity)
+        } animation: { _ in
+            .easeInOut(duration: 0.8)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// 一根灰色圆角占位条，默认铺满给它的宽度。
+private struct SkeletonBar: View {
+    var height: CGFloat
+    var fill: Color = Color(.systemGray5)
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: height / 2, style: .continuous)
+            .fill(fill)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
     }
 }

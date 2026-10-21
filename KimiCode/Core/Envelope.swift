@@ -44,6 +44,8 @@ enum KapErrorCode {
     /// 模型解析不到已配置的 provider（电脑上删了这个模型）。
     static let modelNotResolved = 40113
     static let notFound = 40401
+    static let fileNotFound = 40409
+    static let fileTooLarge = 41302
     static let approvalNotFound = 40404
     static let approvalAlreadyResolved = 40902
     static let remoteControlAlreadyRunning = 40903

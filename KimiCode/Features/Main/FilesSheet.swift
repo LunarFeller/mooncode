@@ -6,6 +6,8 @@ struct FilesButton: View {
     /// 用来调 `fs:list` 的会话。草稿还没有会话时，借同一文件夹里的已有会话（workDir 相同）。
     let sessionID: String?
     let title: String
+    /// 文件预览里点「添加到会话」：把文件交给输入框当附件。
+    let addToChat: (FsEntry) -> Void
 
     @State private var isPresented = false
     @State private var detent: PresentationDetent = .large
@@ -17,7 +19,10 @@ struct FilesButton: View {
             Label("文件", systemImage: "folder")
         }
         .sheet(isPresented: $isPresented) {
-            FilesSheet(client: client, sessionID: sessionID, title: title)
+            FilesSheet(client: client, sessionID: sessionID, title: title) { entry in
+                isPresented = false
+                addToChat(entry)
+            }
                 .presentationDetents([.medium, .large], selection: $detent)
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Color(.systemGroupedBackground))
@@ -30,6 +35,7 @@ private struct FilesSheet: View {
     let client: (any KapServicing)?
     let sessionID: String?
     let title: String
+    let addToChat: (FsEntry) -> Void
 
     var body: some View {
         NavigationStack {
@@ -48,9 +54,15 @@ private struct FilesSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: FsEntry.self) { entry in
                 if let client, let sessionID {
-                    FolderListView(client: client, sessionID: sessionID, path: entry.path)
-                        .navigationTitle(entry.name)
-                        .navigationBarTitleDisplayMode(.inline)
+                    if entry.isDirectory {
+                        FolderListView(client: client, sessionID: sessionID, path: entry.path)
+                            .navigationTitle(entry.name)
+                            .navigationBarTitleDisplayMode(.inline)
+                    } else {
+                        FilePreviewView(client: client, sessionID: sessionID, entry: entry) {
+                            addToChat(entry)
+                        }
+                    }
                 }
             }
             .toolbar {
@@ -89,11 +101,7 @@ private struct FolderListView: View {
                     List {
                         Section {
                             ForEach(list.items) { entry in
-                                if entry.isDirectory {
-                                    NavigationLink(value: entry) { FileRow(entry: entry) }
-                                } else {
-                                    FileRow(entry: entry)
-                                }
+                                NavigationLink(value: entry) { FileRow(entry: entry) }
                             }
                         } footer: {
                             if list.truncated {
@@ -137,7 +145,7 @@ private struct FileRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: symbol)
+            Image(systemName: entry.symbolName)
                 .foregroundStyle(entry.isDirectory ? AnyShapeStyle(Palette.kimi) : AnyShapeStyle(.secondary))
                 .frame(width: 24)
             Text(entry.name)
@@ -160,14 +168,17 @@ private struct FileRow: View {
         }
         return entry.size.map { Int64($0).formatted(.byteCount(style: .file)) }
     }
+}
 
-    private var symbol: String {
-        switch entry.kind {
+extension FsEntry {
+    /// 文件列表行的图标。
+    var symbolName: String {
+        switch kind {
         case .directory: return "folder.fill"
         case .symlink: return "link"
         case .file: break
         }
-        switch (entry.name as NSString).pathExtension.lowercased() {
+        switch (name as NSString).pathExtension.lowercased() {
         case "png", "jpg", "jpeg", "gif", "heic", "webp", "svg", "ico":
             return "photo"
         case "mp4", "mov", "m4v", "webm":

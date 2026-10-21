@@ -8,6 +8,8 @@ protocol KapServicing: Sendable {
     func browseFs(_ path: String) async throws -> FsBrowse
     func fsHome() async throws -> FsHome
     func listFiles(_ sessionID: String, path: String) async throws -> FsList
+    func readFile(_ sessionID: String, path: String) async throws -> FsContent
+    func downloadFile(_ sessionID: String, path: String) async throws -> URL
     func sessions(pageSize: Int) async throws -> SessionList
     func models() async throws -> [ModelInfo]
     func configDefaults() async throws -> ServerConfigDefaults
