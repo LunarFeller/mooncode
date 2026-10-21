@@ -797,15 +797,18 @@ private struct CatalogImportView: View {
                 }
             }
 
-            Section {
-                TextField(entry.baseURL ?? "https://api.example.com/v1", text: $baseURL)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-            } header: {
-                Text("Base URL")
-            } footer: {
-                Text(entry.needsBaseURL ? "这个供应商需要填写地址。" : "可选，留空使用目录里的地址。")
+            // 目录里已有地址的就不让填了（可选项删掉，界面更干净）；只有目录要求时才出现。
+            if entry.needsBaseURL {
+                Section {
+                    TextField("https://api.example.com/v1", text: $baseURL)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: {
+                    Text("Base URL")
+                } footer: {
+                    Text("这个供应商需要填写地址。")
+                }
             }
 
             Section {
