@@ -256,9 +256,6 @@ struct CodeBlockView: View {
 private struct MarkdownTable: View {
     let rows: [[String]]
 
-    /// 长按弹出「拷贝」时整张表淡淡地高亮，和选中文字一个颜色。
-    @State private var isCopyMenuShown = false
-
     /// 按每列最长的内容估一个列宽（60…240pt），超出的在格子里换行。
     private var widths: [CGFloat] {
         let columns = rows.map(\.count).max() ?? 0
@@ -290,16 +287,20 @@ private struct MarkdownTable: View {
                     }
                 }
             }
-            .background(Palette.kimi.opacity(isCopyMenuShown ? 0.12 : 0), in: .rect(cornerRadius: 8))
+            // 长按菜单的预览要有底色，不然浮在变暗的背景上发灰。
+            .background(Color(.systemBackground), in: .rect(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.line, lineWidth: 0.5))
             .padding(0.5)
         }
-        // 表格不进正文的连续选区，长按整张拷贝（制表符分列，粘到表格软件里也能对上）。
-        .gesture(CopyMenuGesture(text: { [rows] in
-            rows.map { row in
-                row.map { String(MarkdownText.inline($0).characters) }.joined(separator: "\t")
-            }.joined(separator: "\n")
-        }, onMenuShown: { isCopyMenuShown = $0 }))
+        .contentShape(.contextMenuPreview, .rect(cornerRadius: 8))
+        // 表格不进正文的连续选区，长按弹系统菜单整张拷贝（制表符分列，粘到表格软件里也能对上）。
+        .contextMenu {
+            Button("拷贝", systemImage: "doc.on.doc") {
+                UIPasteboard.general.string = rows.map { row in
+                    row.map { String(MarkdownText.inline($0).characters) }.joined(separator: "\t")
+                }.joined(separator: "\n")
+            }
+        }
     }
 }
 

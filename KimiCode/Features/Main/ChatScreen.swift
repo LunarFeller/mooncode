@@ -180,7 +180,8 @@ private struct ChatContent: View {
             }
             .contentShape(.rect)
             .simultaneousGesture(
-                TapGesture().onEnded {
+                SpatialTapGesture(coordinateSpace: .global).onEnded { tap in
+                    guard !SelectableTextView.ownsTap(atGlobal: tap.location) else { return }
                     UIApplication.shared.sendAction(
                         #selector(UIResponder.resignFirstResponder),
                         to: nil, from: nil, for: nil
