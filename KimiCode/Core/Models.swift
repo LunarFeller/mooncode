@@ -591,6 +591,48 @@ struct FsBrowse: Decodable, Sendable {
     }
 }
 
+/// `POST /sessions/{id}/fs:list`：会话目录（workDir）里某一层的文件和文件夹。
+/// `path` 都是相对 workDir 的，`"."` 是根目录；服务端已按 `.gitignore` 过滤、文件夹在前排好序。
+struct FsList: Decodable, Sendable {
+    let items: [FsEntry]
+    let truncated: Bool
+
+    enum CodingKeys: String, CodingKey { case items, truncated }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        items = (try? c.decodeIfPresent([FsEntry].self, forKey: .items)) ?? []
+        truncated = (try? c.decodeIfPresent(Bool.self, forKey: .truncated)) ?? false
+    }
+}
+
+struct FsEntry: Decodable, Identifiable, Hashable, Sendable {
+    enum Kind: String, Decodable, Sendable { case file, directory, symlink }
+
+    let path: String
+    let name: String
+    let kind: Kind
+    let size: Int?
+    let childCount: Int?
+
+    var id: String { path }
+    var isDirectory: Bool { kind == .directory }
+
+    enum CodingKeys: String, CodingKey {
+        case path, name, kind, size
+        case childCount = "child_count"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        name = try c.decode(String.self, forKey: .name)
+        kind = (try? c.decode(Kind.self, forKey: .kind)) ?? .file
+        size = try? c.decodeIfPresent(Int.self, forKey: .size)
+        childCount = try? c.decodeIfPresent(Int.self, forKey: .childCount)
+    }
+}
+
 /// `GET /fs:home`：那台电脑的主目录。
 struct FsHome: Decodable, Sendable {
     let home: String

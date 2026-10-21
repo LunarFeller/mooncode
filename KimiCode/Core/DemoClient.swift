@@ -38,6 +38,10 @@ extension DemoClient: KapServicing {
         DemoData.fsHome
     }
 
+    func listFiles(_: String, path: String) async throws -> FsList {
+        DemoData.files(at: path)
+    }
+
     func sessions(pageSize _: Int) async throws -> SessionList {
         await backend.sessions(deviceID: deviceID)
     }
@@ -557,6 +561,25 @@ private enum DemoData {
         """)
 
     static let user: KimiUser = decode(#"{"nickname":"体验用户"}"#)
+
+    /// 体验模式会话目录里的假文件树：相对路径 → 子项（名字以 / 结尾的是文件夹）。
+    private static let fileTree: [String: [(name: String, size: Int)]] = [
+        ".": [("src/", 3), ("docs/", 1), ("README.md", 1_284), ("package.json", 612), (".gitignore", 48)],
+        "src": [("components/", 2), ("main.ts", 2_310), ("utils.ts", 874)],
+        "src/components": [("Button.vue", 1_120), ("Header.vue", 1_960)],
+        "docs": [("guide.md", 4_096)],
+    ]
+
+    static func files(at path: String) -> FsList {
+        let items = (fileTree[path] ?? []).map { item in
+            let isDir = item.name.hasSuffix("/")
+            let name = isDir ? String(item.name.dropLast()) : item.name
+            let rel = path == "." ? name : "\(path)/\(name)"
+            let tail = isDir ? #""kind":"directory","child_count":\#(item.size)"# : #""kind":"file","size":\#(item.size)"#
+            return #"{"path":\#(quoted(rel)),"name":\#(quoted(name)),"modified_at":"2026-01-01T00:00:00Z",\#(tail)}"#
+        }
+        return decode(#"{"items":[\#(items.joined(separator: ","))],"truncated":false}"#)
+    }
 
     static let fsHome: FsHome = decode("""
         {"home":"\(home)","recent_roots":[\

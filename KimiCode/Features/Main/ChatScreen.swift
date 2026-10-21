@@ -47,9 +47,14 @@ struct ChatScreen: View {
                     Label("打开侧栏", systemImage: "line.3.horizontal")
                 }
             }
-            if app.chat != nil {
-                ToolbarItem(placement: .topBarTrailing) {
-                    SessionInfoButton(chat: app.chat)
+            if let chat = app.chat {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    SessionInfoButton(chat: chat)
+                    FilesButton(
+                        client: app.client,
+                        sessionID: chat.sessionID ?? chat.workspace.flatMap { app.sessions(in: $0).first?.id },
+                        title: chat.workspace?.displayName ?? "文件"
+                    )
                 }
             }
         }

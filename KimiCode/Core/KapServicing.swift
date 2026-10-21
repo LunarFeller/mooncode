@@ -7,6 +7,7 @@ protocol KapServicing: Sendable {
     func addWorkspace(root: String) async throws -> Workspace
     func browseFs(_ path: String) async throws -> FsBrowse
     func fsHome() async throws -> FsHome
+    func listFiles(_ sessionID: String, path: String) async throws -> FsList
     func sessions(pageSize: Int) async throws -> SessionList
     func models() async throws -> [ModelInfo]
     func configDefaults() async throws -> ServerConfigDefaults

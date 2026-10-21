@@ -50,6 +50,12 @@ struct KapClient: Sendable {
         try await get("fs:home")
     }
 
+    /// 会话目录里某一层的文件和文件夹（网页端 `listDirectory`）：`POST /sessions/{id}/fs:list`。
+    func listFiles(_ sessionID: String, path: String) async throws -> FsList {
+        struct Body: Encodable { let path: String; let limit: Int }
+        return try await post("sessions/\(sessionID)/fs:list", body: Body(path: path, limit: 1000))
+    }
+
     func models() async throws -> [ModelInfo] {
         let list: ModelList = try await get("models")
         return list.items

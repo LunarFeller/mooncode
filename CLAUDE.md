@@ -38,7 +38,7 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 ```
 主页                                   侧栏（从左推入，主页被推到右边露出一截）
 ┌──────────────────────────┐           ┌──────────────────────┬──┐
-│ (≡)         会话标题       │           │ MoonCode             │  │
+│ (≡)          (◔)(📁)      │           │ MoonCode             │  │
 │                          │           │ 设备 (MAC ▾)          │  │ ← 切设备
 │        对话正文            │           │ 📁 Folder1        (+) │  │ ← + 在该文件夹新建会话
 │                          │           │   ○ Session1          │  │
@@ -64,7 +64,8 @@ diff/文件卡片、看子 agent 与 task 面板、终端流）。
 | 头像 + 昵称 | `GET /oauth/userinfo` → `userInfo.{nickname, avatar}` | 响应里还有手机号等，**只解码这两个字段**。无昵称显示「Kimi 用户」 |
 | 退出登录 | 本地清凭证 | alert「是否退出登录？」→ 取消 / 退出 |
 | 权限图标 | `GET /sessions/{id}/status` 的 `permission` | composer 上只显示图标（hand.raised / checkmark.shield / bolt.shield），文字只在菜单里。**标签映射别弄反**：`manual`=始终询问、`yolo`=必要时询问、`auto`=完全自动 |
-| 右上角 ⋯ 面板 | 上：`/status` 的 `context_usage`（同心圆 + 已使用 x%；输入框上不再放上下文圈）；下：`GET /oauth/usage` → `quota.usages.{limit5h,limit7d,monthTotal}`，显示**剩余** `1 - usedRatio` | 按 5 小时 → 每周 → 每月 顺序显示存在的项（实测这个账号是 5 小时 + 每月）。打开时刷新 |
+| 右上角 📁（上下文环右边） | `POST /sessions/{id}/fs:list {path, limit:1000}` → `{items:[{path,name,kind,size,child_count}], truncated}` | 同网页端 `listDirectory`；`path` 相对会话 workDir，服务端按 `.gitignore` 过滤、文件夹在前。上拉栏（medium/large），点文件夹逐级推入。草稿借同文件夹里最近的会话（workDir 相同）；文件夹里一个会话都没有时提示发第一条消息后再看（`fs:browse` 只回文件夹，拿不到文件） |
+| 右上角上下文环（📁 左边） | 环：`/status` 的 `context_usage`，之后由事件里的 `contextUsage` 实时更新（输入框上不放上下文圈）。点开「用量」上拉栏（左上角 ✕，medium/large），每项一张卡片、卡片上方灰色小标题：「此对话上下文」卡片 = 已使用 x% + 横条 + `context_tokens / max_context_tokens`；「5 小时 / 每周 / 每月使用限额」卡片 = `GET /oauth/usage` → `quota.usages.{limit5h,limit7d,monthTotal}` 的**已使用** `usedRatio` + 横条 +「21小时59分钟后重置」（`resetAt`） | 按 5 小时 → 每周 → 每月 顺序显示存在的项。打开时刷新用量 |
 | K3·Low | 同上 `model` + `thinking_level`；名字查 `GET /models` 的 `display_name`，可选强度查 `support_efforts` | `thinking` 取值是强度名或 `on`/`off`；只有一个选项（如恒开无强度）时只显示名字，`off` 显示「Off」 |
 | 模型菜单 | `GET /models` 全部列出，按 provider 分组（`managed:kimi-code` 组名「Kimi 订阅」排最前，其他照原 id 显示，同网页端） | 第三方模型（deepseek 等）由电脑上的 config 配置，App 只选不管：不做 provider 增删、不碰 API Key。思考选项照网页端 `ov`/`sv`/`z1`：`always_thinking`+强度 → 选强度；只有 `thinking` → 开/关；都没有 → 固定 `off`（见 `ModelInfo.thinkingOptions`） |
 | 改权限 / 模型 / 强度 | `POST /sessions/{id}/profile {agent_config:{permission_mode?, model?, thinking?}}` | 只带改动的字段 |
