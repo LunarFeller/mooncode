@@ -135,6 +135,8 @@ private struct SidebarPanGesture: UIGestureRecognizerRepresentable {
             let velocity = pan.velocity(in: pan.view?.window)
             // 只在开始时判一次方向，后续手指上下偏移不会切回滚动。
             guard abs(velocity.x) > abs(velocity.y) * 1.5, isOpen || velocity.x > 0 else { return false }
+            // 正文里正在选字：横着拖多半是在拖选区手柄，不开侧栏。
+            if SelectableTextView.isSelecting { return false }
             // 横向可滚的内容优先自己滚；已经滚到最左还往右滑，才交给侧栏。
             if let scrollView = horizontalScrollView(from: touchedView) {
                 let atLeadingEdge = scrollView.contentOffset.x <= -scrollView.adjustedContentInset.left + 1

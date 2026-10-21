@@ -216,10 +216,12 @@ struct UserTurnView: View {
                     FlowAttachments(attachments: entry.attachments)
                 }
                 if !entry.text.isEmpty {
-                    Text(entry.text)
-                        .lineSpacing(3)
-                        .lineLimit(expanded ? nil : Self.clampLines)
-                        .textSelection(.enabled)
+                    // 长按可以自由选择（UIKit 排版，见 `SelectableText`）。
+                    SelectableText(
+                        content: .plain(entry.text, tone: .body, lineSpacing: 3),
+                        hugsWidth: true,
+                        lineLimit: expanded ? 0 : Self.clampLines
+                    )
                         .background {
                             // 量一下完整高度，判断是否被截断。
                             Text(entry.text).lineSpacing(3).fixedSize(horizontal: false, vertical: true).hidden()
@@ -655,6 +657,7 @@ struct ThinkingBlockView: View {
     @State private var metrics = Metrics()
 
     private var key: String { "think:\(item.id)" }
+    private static let tone = TextTone(textStyle: .subheadline, secondary: true)
     private var headerID: String { "think-header:\(item.id)" }
     /// 标题滚回来后停的位置：留出左上 / 右上浮动按钮的高度。
     private static let revealAnchor = UnitPoint(x: 0, y: 0.14)
@@ -712,23 +715,17 @@ struct ThinkingBlockView: View {
                 IndentedBody {
                     // 长思考动辄上万字：按段拆开、懒加载，只排屏幕上看得到的那几段。
                     // 整段放进一个 Text 的话，每次展开都要把上万字排好几遍，主线程卡半秒多。
+                    // 每段各自可长按选择（段与段之间选区不连）。
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(Array(Self.paragraphs(item.text).enumerated()), id: \.offset) { _, paragraph in
-                            Text(paragraph)
-                                .lineSpacing(3)
-                                .textSelection(.enabled)
+                            SelectableText(content: .plain(paragraph, tone: Self.tone, lineSpacing: 3))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
                     .padding(.vertical, 6)
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { metrics.bodyHeight = $0 }
                 .capped(at: cap)
-                // 展开后点正文也能收起（长按仍是选中文本）。
-                .contentShape(.rect)
-                .onTapGesture { collapse() }
             }
         }
         .onChange(of: streaming) { wasStreaming, isStreaming in
