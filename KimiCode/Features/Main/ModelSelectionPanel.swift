@@ -1,10 +1,17 @@
 import SwiftUI
 
-/// 选择暂存在面板内，只有点完成才写入会话；下滑关闭即放弃修改。
+/// 点模型或思考强度立刻写入会话（自动保存），左上角 ✕ 或下滑关闭；右上角 ⚙︎ 管理模型供应商。
 struct ModelSelectionPanel: View {
     let models: [ModelInfo]
-    let confirm: (ModelInfo, String?) -> Void
+    let apply: (ModelInfo, String?) -> Void
     var onHeight: ((CGFloat) -> Void)?
+    /// 有它才显示 ⚙︎：读写电脑上的供应商配置。
+    var client: (any KapServicing)?
+    /// 供应商改完后重拉模型列表。
+    var onProvidersChanged: () async -> Void = {}
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var showsSettings = false
 
     @State private var selectedID: String?
     @State private var selectedEffort: String?
@@ -13,12 +20,16 @@ struct ModelSelectionPanel: View {
     init(
         models: [ModelInfo],
         config: ComposerConfig,
-        confirm: @escaping (ModelInfo, String?) -> Void,
-        onHeight: ((CGFloat) -> Void)? = nil
+        apply: @escaping (ModelInfo, String?) -> Void,
+        onHeight: ((CGFloat) -> Void)? = nil,
+        client: (any KapServicing)? = nil,
+        onProvidersChanged: @escaping () async -> Void = {}
     ) {
         self.models = models
-        self.confirm = confirm
+        self.apply = apply
         self.onHeight = onHeight
+        self.client = client
+        self.onProvidersChanged = onProvidersChanged
         _selectedID = State(initialValue: config.modelID)
         _selectedEffort = State(initialValue: config.effort)
     }
@@ -45,9 +56,33 @@ struct ModelSelectionPanel: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            Text("模型")
-                .font(.headline)
-                .padding(.top, 28)
+            ZStack {
+                Text("模型")
+                    .font(.headline)
+                HStack {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark")
+                            .font(.body.weight(.medium))
+                            .frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .accessibilityLabel("关闭")
+                    Spacer()
+                    if client != nil {
+                        Button(action: { showsSettings = true }) {
+                            Image(systemName: "gearshape")
+                                .font(.body.weight(.medium))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .accessibilityLabel("管理模型供应商")
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -69,27 +104,24 @@ struct ModelSelectionPanel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Button {
-                guard let model = selectedModel else { return }
-                confirm(model, model.normalizedThinking(selectedEffort))
-            } label: {
-                Text("完成")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .foregroundStyle(.white)
-                    .background(Palette.kimi, in: .capsule)
-            }
-            .buttonStyle(.plain)
-            .opacity(selectedModel == nil ? 0.4 : 1)
-            .disabled(selectedModel == nil)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 16)
         }
+        .padding(.bottom, 28)
         // 面板高度按内容算（交给外面设 detent），不留大片空白。
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeight?($0) }
-        .background(Color(.systemBackground))
+        .background(Color(.systemGroupedBackground))
+        .sheet(isPresented: $showsSettings) {
+            if let client {
+                ProviderSettingsSheet(client: client, onChange: onProvidersChanged)
+                    .presentationDetents([.large])
+            }
+        }
+    }
+
+    /// 自动保存：每次改动直接写入会话。
+    private func applySelection() {
+        guard let model = selectedModel else { return }
+        apply(model, model.normalizedThinking(selectedEffort))
     }
 
     @ViewBuilder
@@ -116,53 +148,46 @@ struct ModelSelectionPanel: View {
                                     Divider().padding(.horizontal, 20)
                                 }
                                 choiceRow(model.name, selected: selectedID == model.model) {
+                                    guard selectedID != model.model else { return }
                                     selectedID = model.model
                                     selectedEffort = model.normalizedThinking(selectedEffort)
+                                    applySelection()
                                 }
                                 .id(model.model)
                             }
                         }
-                        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 24))
+                        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
                     }
                 }
             }
         }
     }
 
-    /// 固定在模型列表下方，点击整行弹出原生单选菜单。有强度时选强度，没强度时只有开 / 关。
+    /// 固定在模型列表下方的分段控件，从左到右低 → 高，点一下即生效。
+    /// 不用弹出菜单：iOS 26 的菜单会从整行胶囊「变形」出来、盖住模型列表，观感很怪。
     private func thinkingMenu(for model: ModelInfo) -> some View {
         let title = model.efforts.isEmpty ? "思考" : "思考强度"
         let current = model.normalizedThinking(selectedEffort)
-        return Menu {
+        return VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.body.weight(.medium))
             Picker(title, selection: Binding(
                 get: { current },
-                set: { selectedEffort = $0 }
+                set: {
+                    selectedEffort = $0
+                    applySelection()
+                }
             )) {
                 ForEach(model.thinkingOptions, id: \.self) { option in
                     Text(option.thinkingOptionLabel).tag(option)
                 }
             }
-            .pickerStyle(.inline)
-        } label: {
-            HStack(spacing: 12) {
-                Text(title)
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 12)
-                Text(current.thinkingOptionLabel)
-                    .foregroundStyle(.secondary)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .font(.body.weight(.medium))
-            .padding(.horizontal, 20)
-            .frame(minHeight: 52)
-            .background(Color(.secondarySystemBackground), in: .capsule)
-            .contentShape(.capsule)
+            .pickerStyle(.segmented)
+            .labelsHidden()
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityValue(current.thinkingOptionLabel)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
     }
 
     private func choiceRow(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {

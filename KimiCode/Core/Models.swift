@@ -797,6 +797,203 @@ struct ServerConfigDefaults: Decodable, Sendable {
     }
 }
 
+// MARK: - 模型供应商（照网页端「供应商管理」）
+
+/// `GET /providers` 的一项。`GET /providers/{id}` 额外带 `api_key`（编辑表单预填用）。
+struct ProviderItem: Decodable, Identifiable, Hashable, Sendable {
+    let id: String
+    let type: String
+    let baseURL: String?
+    let defaultModel: String?
+    let hasAPIKey: Bool
+    let status: Status
+    let models: [String]
+    let apiKey: String?
+
+    enum Status: String, Decodable, Sendable {
+        case connected, error, unconfigured
+    }
+
+    /// Kimi 订阅：OAuth 托管，不能在这里改（网页端 `oZ`）。
+    var isManaged: Bool { id == KimiConfig.kimiSubscriptionProvider && type == "kimi" }
+    var title: String { isManaged ? "Kimi 订阅" : id }
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, status, models
+        case baseURL = "base_url"
+        case defaultModel = "default_model"
+        case hasAPIKey = "has_api_key"
+        case apiKey = "api_key"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        type = try c.decode(String.self, forKey: .type)
+        baseURL = try? c.decodeIfPresent(String.self, forKey: .baseURL)
+        defaultModel = try? c.decodeIfPresent(String.self, forKey: .defaultModel)
+        hasAPIKey = (try? c.decode(Bool.self, forKey: .hasAPIKey)) ?? false
+        status = (try? c.decode(Status.self, forKey: .status)) ?? .unconfigured
+        models = (try? c.decodeIfPresent([String].self, forKey: .models)) ?? []
+        apiKey = try? c.decodeIfPresent(String.self, forKey: .apiKey)
+    }
+}
+
+struct ProviderList: Decodable, Sendable {
+    let items: [ProviderItem]
+}
+
+/// API 协议（`providerWireTypeSchema`），顺序同网页端下拉。
+enum ProviderWireType: String, CaseIterable, Identifiable, Sendable {
+    case kimi, openai
+    case openaiResponses = "openai_responses"
+    case anthropic
+    case googleGenAI = "google-genai"
+    case vertexAI = "vertexai"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .kimi: "Kimi"
+        case .openai: "OpenAI"
+        case .openaiResponses: "OpenAI Responses"
+        case .anthropic: "Anthropic"
+        case .googleGenAI: "Google GenAI"
+        case .vertexAI: "Vertex AI"
+        }
+    }
+
+    static func title(for raw: String?) -> String {
+        raw.flatMap(ProviderWireType.init(rawValue:))?.title ?? raw ?? "未知协议"
+    }
+}
+
+/// `GET /config` 里 `models` 段的一项（键名是驼峰）。编辑供应商时用它还原模型表（网页端 `Tx`）。
+struct ConfigModelEntry: Decodable, Sendable {
+    let provider: String
+    let model: String
+    let maxContextSize: Int?
+    let displayName: String?
+    let capabilities: [String]?
+    let supportEfforts: [String]?
+    let adaptiveThinking: Bool?
+}
+
+/// 只解码 `GET /config` 的 `models` 段；单项坏了跳过，不影响其他。
+struct ServerConfigModels: Decodable, Sendable {
+    let items: [ConfigModelEntry]
+
+    private struct Lenient: Decodable {
+        let value: ConfigModelEntry?
+        init(from decoder: any Decoder) throws { value = try? ConfigModelEntry(from: decoder) }
+    }
+
+    enum CodingKeys: String, CodingKey { case models }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = (try? c.decodeIfPresent([String: Lenient].self, forKey: .models)) ?? [:]
+        items = raw.values.compactMap(\.value)
+    }
+}
+
+/// 新建 / 整体替换供应商时的一个模型（`createProviderModelSchema`）。
+struct ProviderModelInput: Encodable, Sendable {
+    let model: String
+    let maxContextSize: Int
+    let displayName: String?
+    let capabilities: [String]?
+    let supportEfforts: [String]?
+    let adaptiveThinking: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case maxContextSize = "max_context_size"
+        case displayName = "display_name"
+        case capabilities
+        case supportEfforts = "support_efforts"
+        case adaptiveThinking = "adaptive_thinking"
+    }
+}
+
+/// `POST /providers`（带 `id`）与 `PUT /providers/{id}`（改名时带 `new_id`）的请求体。
+/// `api_key`：不带 = 保留原值，`""` = 清空，其他 = 替换。
+struct ProviderWriteBody: Encodable, Sendable {
+    var id: String?
+    var newID: String?
+    let type: String
+    var apiKey: String?
+    var baseURL: String?
+    var defaultModel: String?
+    let models: [ProviderModelInput]
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, models
+        case newID = "new_id"
+        case apiKey = "api_key"
+        case baseURL = "base_url"
+        case defaultModel = "default_model"
+    }
+}
+
+/// `GET /catalog/providers`：models.dev 目录里的供应商。
+struct CatalogProvider: Decodable, Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let wireType: String?
+    let baseURL: String?
+    let needsBaseURL: Bool
+    let rejected: Bool
+    let rejectReason: String?
+    let modelCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, rejected, models
+        case wireType = "wire_type"
+        case baseURL = "base_url"
+        case needsBaseURL = "needs_base_url"
+        case rejectReason = "reject_reason"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = (try? c.decode(String.self, forKey: .name)) ?? id
+        wireType = try? c.decodeIfPresent(String.self, forKey: .wireType)
+        baseURL = try? c.decodeIfPresent(String.self, forKey: .baseURL)
+        needsBaseURL = (try? c.decode(Bool.self, forKey: .needsBaseURL)) ?? false
+        rejected = (try? c.decode(Bool.self, forKey: .rejected)) ?? false
+        rejectReason = try? c.decodeIfPresent(String.self, forKey: .rejectReason)
+        modelCount = (try? c.decodeIfPresent([JSONValue].self, forKey: .models))?.count ?? 0
+    }
+
+    /// 不能导入的原因（网页端 `catalog.rejectReason`）。
+    var rejectText: String {
+        switch rejectReason {
+        case "unknown-explicit-type": "协议不受支持"
+        case "proprietary-sdk": "私有协议，无法导入"
+        case "empty-base-url": "Base URL 为空"
+        case "placeholder-base-url": "端点包含环境变量占位符"
+        default: "不可导入"
+        }
+    }
+}
+
+struct CatalogProviderList: Decodable, Sendable {
+    let items: [CatalogProvider]
+}
+
+/// `POST /providers/{id}:refresh` 的结果里只关心失败项。
+struct ProviderRefreshResult: Decodable, Sendable {
+    struct Failure: Decodable, Sendable {
+        let provider: String
+        let reason: String
+    }
+
+    let failed: [Failure]?
+}
+
 extension String {
     /// `low` → `Low`，composer 上的「K3·Low」。
     var effortLabel: String {

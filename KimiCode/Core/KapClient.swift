@@ -123,6 +123,85 @@ struct KapClient: Sendable {
         try await get("config")
     }
 
+    // MARK: 模型供应商（与网页端 `listProviders` / `addProvider` / `updateProvider` … 同形）
+
+    func providers() async throws -> [ProviderItem] {
+        let list: ProviderList = try await get("providers")
+        return list.items
+    }
+
+    /// 单个供应商，带已存的 `api_key`（编辑表单预填）。
+    func provider(_ id: String) async throws -> ProviderItem {
+        try await get("providers/\(id)")
+    }
+
+    /// `/config` 里的模型别名（只解码 `models` 段，别的配置不碰）。
+    func configModels() async throws -> [ConfigModelEntry] {
+        let config: ServerConfigModels = try await get("config")
+        return config.items
+    }
+
+    func createProvider(_ body: ProviderWriteBody) async throws {
+        let _: JSONValue = try await post("providers", body: body)
+    }
+
+    func replaceProvider(_ id: String, body: ProviderWriteBody) async throws {
+        let _: JSONValue = try await send(method: "PUT", path: "providers/\(id)", query: [:], body: body)
+    }
+
+    /// 成功是 204 无正文；业务错误照常是 200 + 错误信封。
+    func deleteProvider(_ id: String) async throws {
+        var request = URLRequest(url: endpoint.apiBaseURL.appending(path: "providers/\(id)"))
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token = await tokenProvider() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(status) else {
+            throw KapError.http(status: status, body: String(data: data, encoding: .utf8) ?? "")
+        }
+        if !data.isEmpty, let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data),
+           envelope.code != KapErrorCode.ok {
+            throw KapError.api(code: envelope.code, message: envelope.msg)
+        }
+    }
+
+    /// 重新拉这个供应商的模型元数据；失败项当错误抛出来。
+    func refreshProvider(_ id: String) async throws {
+        struct Empty: Encodable {}
+        let result: ProviderRefreshResult = try await post("providers/\(id):refresh", body: Empty())
+        if let failure = result.failed?.first {
+            throw KapError.api(code: -1, message: failure.reason)
+        }
+    }
+
+    func catalogProviders() async throws -> [CatalogProvider] {
+        let list: CatalogProviderList = try await get("catalog/providers")
+        return list.items
+    }
+
+    func importCatalogProvider(catalogID: String, id: String?, apiKey: String, baseURL: String?) async throws {
+        struct Body: Encodable {
+            let catalogID: String
+            let id: String?
+            let apiKey: String
+            let baseURL: String?
+
+            enum CodingKeys: String, CodingKey {
+                case id
+                case catalogID = "catalog_id"
+                case apiKey = "api_key"
+                case baseURL = "base_url"
+            }
+        }
+        let _: JSONValue = try await post(
+            "providers:import_catalog",
+            body: Body(catalogID: catalogID, id: id, apiKey: apiKey, baseURL: baseURL)
+        )
+    }
+
     /// 订阅用量。是那台电脑上登录的账号的用量（与本 App 同账号）。
     func usage() async throws -> PlanUsage {
         try await get("oauth/usage")

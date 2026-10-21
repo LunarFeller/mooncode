@@ -104,18 +104,21 @@ struct ComposerView: View {
         }) { panel in
             switch panel {
             case .model:
-                ModelSelectionPanel(models: app.models, config: chat.config, confirm: { model, effort in
+                ModelSelectionPanel(models: app.models, config: chat.config, apply: { model, effort in
                     Task { await chat.setModel(model, effort: effort) }
-                    activePanel = nil
-                }, onHeight: { modelPanelHeight = $0 })
+                }, onHeight: { modelPanelHeight = $0 }, client: app.client, onProvidersChanged: {
+                    await app.reloadModels()
+                })
                 .presentationDetents([.height(modelPanelHeight)])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(32)
+                .presentationBackground(Color(.systemGroupedBackground))
             case .attachment:
                 attachmentPanel
                     .presentationDetents([.height(230)])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(32)
+                    .presentationBackground(Color(.systemGroupedBackground))
             }
         }
         .photosPicker(
@@ -225,7 +228,7 @@ struct ComposerView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 12)
-        .background(Color(.systemBackground))
+        .background(Color(.systemGroupedBackground))
     }
 
     private func attachmentCard(_ title: String, symbol: String, source: AttachmentSource) -> some View {
@@ -242,7 +245,7 @@ struct ComposerView: View {
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity)
             .frame(height: 112)
-            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
+            .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
             .contentShape(.rect(cornerRadius: 22))
         }
         .buttonStyle(.plain)

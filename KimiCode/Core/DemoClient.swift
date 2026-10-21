@@ -58,6 +58,35 @@ extension DemoClient: KapServicing {
 
     func configDefaults() async throws -> ServerConfigDefaults { DemoData.configDefaults }
 
+    // 体验模式只展示 Kimi 订阅，不能增删改供应商。
+    func providers() async throws -> [ProviderItem] { [DemoData.provider] }
+
+    func provider(_: String) async throws -> ProviderItem { DemoData.provider }
+
+    func configModels() async throws -> [ConfigModelEntry] {
+        DemoData.models.map {
+            ConfigModelEntry(
+                provider: $0.provider, model: $0.model, maxContextSize: $0.maxContextSize,
+                displayName: $0.displayName, capabilities: $0.capabilities,
+                supportEfforts: $0.supportEfforts, adaptiveThinking: nil
+            )
+        }
+    }
+
+    func createProvider(_: ProviderWriteBody) async throws { throw DemoData.readOnly }
+
+    func replaceProvider(_: String, body _: ProviderWriteBody) async throws { throw DemoData.readOnly }
+
+    func deleteProvider(_: String) async throws { throw DemoData.readOnly }
+
+    func refreshProvider(_: String) async throws {}
+
+    func catalogProviders() async throws -> [CatalogProvider] { throw DemoData.readOnly }
+
+    func importCatalogProvider(catalogID _: String, id _: String?, apiKey _: String, baseURL _: String?) async throws {
+        throw DemoData.readOnly
+    }
+
     func usage() async throws -> PlanUsage { DemoData.usage }
 
     func userInfo() async throws -> KimiUser? { DemoData.user }
@@ -563,6 +592,13 @@ private enum DemoData {
         """)
 
     static let configDefaults: ServerConfigDefaults = decode(#"{"default_model":"kimi-code/k3"}"#)
+
+    static let provider: ProviderItem = decode("""
+        {"id":"managed:kimi-code","type":"kimi","has_api_key":true,"status":"connected",\
+        "models":[\(models.map { quoted($0.model) }.joined(separator: ","))]}
+        """)
+
+    static let readOnly = KapError.api(code: -1, message: "体验模式下不能修改模型配置。登录后可以管理电脑上的模型供应商。")
 
     static let usage: PlanUsage = decode("""
         {"quota":{"usages":{"limit5h":{"usedRatio":0.42},"monthTotal":{"usedRatio":0.63}}}}

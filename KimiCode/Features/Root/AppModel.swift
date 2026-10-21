@@ -156,6 +156,18 @@ final class AppModel {
         reconcileDraft()
     }
 
+    /// 供应商改完后重拉模型列表和默认模型（composer / 模型面板跟着变）。
+    func reloadModels() async {
+        guard let client else { return }
+        async let models = client.models()
+        async let config = client.configDefaults()
+        if let all = try? await models {
+            self.models = all.filter(\.isKimiSubscription) + all.filter { !$0.isKimiSubscription }
+        }
+        if let config = try? await config { self.defaultModelID = config.defaultModel }
+        reconcileDraft()
+    }
+
     /// 打开侧栏时刷新：会话状态（忙/待确认）变化最快。
     func refreshSidebar() async {
         guard let client else { return }
