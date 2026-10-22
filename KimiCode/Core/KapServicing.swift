@@ -13,6 +13,8 @@ protocol KapServicing: Sendable {
     func sessions(pageSize: Int) async throws -> SessionList
     func models() async throws -> [ModelInfo]
     func configDefaults() async throws -> ServerConfigDefaults
+    /// 改电脑上的新会话默认值（默认模型 / 权限 / 思考）。
+    func updateConfig(_ patch: ServerConfigPatch) async throws -> ServerConfigDefaults
 
     // 模型供应商（模型面板 ⚙︎）
     func providers() async throws -> [ProviderItem]

@@ -10,7 +10,8 @@ struct FilesButton: View {
     let addToChat: (FsEntry) -> Void
 
     @State private var isPresented = false
-    @State private var detent: PresentationDetent = .large
+    /// 默认半屏，想看更多再往上拉。
+    @State private var detent: PresentationDetent = .medium
 
     var body: some View {
         Button {

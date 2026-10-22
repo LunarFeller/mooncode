@@ -123,6 +123,10 @@ struct KapClient: Sendable {
         try await get("config")
     }
 
+    func updateConfig(_ patch: ServerConfigPatch) async throws -> ServerConfigDefaults {
+        try await post("config", body: patch)
+    }
+
     // MARK: 模型供应商（与网页端 `listProviders` / `addProvider` / `updateProvider` … 同形）
 
     func providers() async throws -> [ProviderItem] {

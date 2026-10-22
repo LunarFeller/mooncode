@@ -104,11 +104,15 @@ struct ComposerView: View {
         }) { panel in
             switch panel {
             case .model:
-                ModelSelectionPanel(models: app.models, config: chat.config, apply: { model, effort in
-                    Task { await chat.setModel(model, effort: effort) }
-                }, onHeight: { modelPanelHeight = $0 }, client: app.client, onProvidersChanged: {
-                    await app.reloadModels()
-                })
+                ModelPanel(
+                    models: app.models,
+                    config: chat.config,
+                    client: app.client,
+                    applyModel: { model, effort in Task { await chat.setModel(model, effort: effort) } },
+                    applyEffort: { model, effort in Task { await chat.setModel(model, effort: effort) } },
+                    onProvidersChanged: { await app.reloadModels() },
+                    onHeight: { modelPanelHeight = $0 }
+                )
                 .presentationDetents([.height(modelPanelHeight)])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(32)
@@ -199,6 +203,7 @@ struct ComposerView: View {
         .accessibilityLabel("权限：\(chat.config.permission.title)")
     }
 
+    /// 「模型名 High」一个按钮：点开模型面板（当前模型 + 思考强度）。
     private var modelMenu: some View {
         Button {
             isFocused = false
@@ -206,7 +211,7 @@ struct ComposerView: View {
         } label: {
             // 模型名正常色，思考强度与占位文字同色。
             (Text(modelName).foregroundStyle(.primary)
-                + Text(effortSuffix).foregroundStyle(Color(.secondaryLabel)))
+                + Text(effortLabel.isEmpty ? "" : " \(effortLabel)").foregroundStyle(Color(.secondaryLabel)))
                 .font(.subheadline.weight(.medium))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
@@ -257,11 +262,11 @@ struct ComposerView: View {
             ?? "模型"
     }
 
-    /// 「 Max」/「 Off」：只有能选的模型才显示；开着思考但没强度可选（`on`）时为空。
-    private var effortSuffix: String {
+    /// 「Max」/「Off」：只有能选的模型才显示；开着思考但没强度可选（`on`）时为空。
+    private var effortLabel: String {
         guard let effort = chat.config.effort, effort != "on",
               let model = currentModel, model.thinkingOptions.count > 1 else { return "" }
-        return " \(effort.effortLabel)"
+        return effort.effortLabel
     }
 
     @ViewBuilder

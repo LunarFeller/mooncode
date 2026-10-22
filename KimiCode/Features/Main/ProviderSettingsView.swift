@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 模型面板右上角 ⚙︎：管理电脑上 Kimi Code 配置里的模型供应商，照网页端「供应商管理」。
-/// 列表 → 编辑 / 手动添加 / 从目录（models.dev）添加；改动直接写进电脑上的 config.toml。
+/// 模型面板右上角 ⚙︎：「模型配置」。最上面是新会话的默认配置（默认模型 / 权限 / 思考，照网页端「Agent 默认值」），
+/// 下面是模型供应商（照网页端「供应商管理」）：编辑 / 手动添加 / 从目录（models.dev）添加。改动直接写进电脑上的配置。
 struct ProviderSettingsSheet: View {
     let client: any KapServicing
     /// 供应商有增删改后调用，外面据此重拉模型列表。
@@ -9,6 +9,8 @@ struct ProviderSettingsSheet: View {
 
     @State private var providers: [ProviderItem]?
     @State private var configModels: [ConfigModelEntry] = []
+    @State private var defaults: ServerConfigDefaults?
+    @State private var models: [ModelInfo] = []
     @State private var loadError: String?
     @State private var actionError: String?
     @State private var refreshingID: String?
@@ -16,6 +18,7 @@ struct ProviderSettingsSheet: View {
     @State private var path: [Route] = []
 
     enum Route: Hashable {
+        case defaults
         case edit(ProviderItem)
         case add
         case catalog
@@ -25,7 +28,7 @@ struct ProviderSettingsSheet: View {
     var body: some View {
         NavigationStack(path: $path) {
             content
-                .navigationTitle("模型供应商")
+                .navigationTitle("模型配置")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -71,8 +74,21 @@ struct ProviderSettingsSheet: View {
             List {
                 let managed = providers.filter(\.isManaged)
                 let others = providers.filter { !$0.isManaged }
+                Section {
+                    NavigationLink(value: Route.defaults) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("默认配置")
+                                .font(.body.weight(.medium))
+                            Text(defaultsSummary)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
                 if !managed.isEmpty {
-                    Section {
+                    Section("模型供应商") {
                         ForEach(managed) { row($0) }
                     }
                 }
@@ -83,9 +99,7 @@ struct ProviderSettingsSheet: View {
                     }
                     ForEach(others) { row($0) }
                 } header: {
-                    if !managed.isEmpty { Text("其他供应商") }
-                } footer: {
-                    Text("改动会直接写入电脑上 Kimi Code 的配置。")
+                    Text(managed.isEmpty ? "模型供应商" : "其他供应商")
                 }
             }
             .listStyle(.insetGrouped)
@@ -133,6 +147,18 @@ struct ProviderSettingsSheet: View {
         }
     }
 
+    /// 「K3 · 始终询问 · Max」。
+    private var defaultsSummary: String {
+        guard let defaults else { return "读取中…" }
+        let model = models.first { $0.model == defaults.defaultModel }
+        var parts = [model?.name ?? defaults.defaultModel.map { ($0 as NSString).lastPathComponent } ?? "未设置默认模型"]
+        parts.append((defaults.defaultPermissionMode ?? .manual).title)
+        if let model, model.thinkingOptions.count > 1 {
+            parts.append(defaults.thinkingOption(for: model).thinkingOptionLabel)
+        }
+        return parts.joined(separator: " · ")
+    }
+
     private func subtitle(for provider: ProviderItem) -> String {
         let kind = provider.isManaged ? "OAuth 托管" : ProviderWireType.title(for: provider.type)
         var parts = [kind, "\(provider.models.count) 个模型"]
@@ -143,6 +169,11 @@ struct ProviderSettingsSheet: View {
     @ViewBuilder
     private func destination(_ route: Route) -> some View {
         switch route {
+        case .defaults:
+            DefaultsSettingsView(client: client, models: models, initial: defaults) { updated in
+                defaults = updated
+                await onChange()
+            }
         case let .edit(provider):
             ProviderEditView(
                 client: client,
@@ -171,9 +202,14 @@ struct ProviderSettingsSheet: View {
     private func load() async {
         do {
             async let items = client.providers()
-            async let models = client.configModels()
+            async let entries = client.configModels()
+            async let config = client.configDefaults()
+            async let list = client.models()
             providers = try await items
-            configModels = (try? await models) ?? []
+            configModels = (try? await entries) ?? []
+            defaults = try? await config
+            let all = (try? await list) ?? []
+            models = all.filter(\.isKimiSubscription) + all.filter { !$0.isKimiSubscription }
             loadError = nil
         } catch is CancellationError {
         } catch {
@@ -240,6 +276,196 @@ private struct StatusBadge: View {
         case .error: .red
         case .unconfigured: Color(.tertiaryLabel)
         }
+    }
+}
+
+// MARK: - 默认配置
+
+/// 新会话的默认模型 / 权限 / 思考（网页端「Agent 默认值」的前三项）。每改一项立刻 `POST /config`。
+private struct DefaultsSettingsView: View {
+    let client: any KapServicing
+    let models: [ModelInfo]
+    let onSaved: (ServerConfigDefaults) async -> Void
+
+    @State private var config: ServerConfigDefaults?
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    init(client: any KapServicing, models: [ModelInfo], initial: ServerConfigDefaults?,
+         onSaved: @escaping (ServerConfigDefaults) async -> Void) {
+        self.client = client
+        self.models = models
+        self.onSaved = onSaved
+        _config = State(initialValue: initial)
+    }
+
+    private var defaultModel: ModelInfo? { models.first { $0.model == config?.defaultModel } }
+
+    /// 配置里的默认模型这台电脑上已经没有（或写错了）时照原样标出来，别显示成「未设置」。
+    private var defaultModelLabel: String {
+        if let defaultModel { return defaultModel.name }
+        if let raw = config?.defaultModel, !raw.isEmpty { return "\(raw)（不可用）" }
+        return "未设置"
+    }
+
+    /// 按来源分组，同模型面板。
+    private var groups: [(label: String, models: [ModelInfo])] {
+        var result: [(label: String, models: [ModelInfo])] = []
+        for model in models {
+            if let index = result.firstIndex(where: { $0.label == model.providerLabel }) {
+                result[index].models.append(model)
+            } else {
+                result.append((model.providerLabel, [model]))
+            }
+        }
+        return result
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                // 不用 `.navigationLink` 的 Picker：它会把分组摊平，组名变成可选的行、勾号也会错位。
+                NavigationLink {
+                    DefaultModelList(groups: groups, selected: config?.defaultModel) { id in
+                        save(ServerConfigPatch(defaultModel: id))
+                    }
+                } label: {
+                    LabeledContent("默认模型", value: defaultModelLabel)
+                }
+            } footer: {
+                Text("新会话会优先使用这个模型。")
+            }
+
+            Section {
+                let mode = config?.defaultPermissionMode ?? .manual
+                LabeledContent("默认权限") {
+                    // 自己画右侧的值：系统菜单 Picker 的图标和字贴得太紧。点开仍是系统菜单（带图标和说明）。
+                    Menu {
+                        Picker("默认权限", selection: Binding(
+                            get: { mode },
+                            set: { save(ServerConfigPatch(defaultPermissionMode: $0)) }
+                        )) {
+                            ForEach(PermissionMode.allCases) { option in
+                                Label {
+                                    Text(option.title)
+                                    Text(option.subtitle)
+                                } icon: {
+                                    Image(systemName: option.symbolName)
+                                }
+                                .tag(option)
+                            }
+                        }
+                        .pickerStyle(.inline)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: mode.symbolName)
+                            Text(mode.title)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .foregroundStyle(Color(.secondaryLabel))
+                    }
+                }
+            } footer: {
+                Text("只影响之后新建的会话。")
+            }
+
+            Section {
+                if let model = defaultModel, let config {
+                    if model.thinkingOptions.count > 1 {
+                        Picker(model.efforts.isEmpty ? "默认思考" : "默认思考强度", selection: Binding(
+                            get: { config.thinkingOption(for: model) },
+                            set: { option in
+                                // 网页端 `q8`：选「开启」时落到模型的默认强度。
+                                let value = option == "on" ? model.defaultThinking : option
+                                save(ServerConfigPatch(thinking: .init(option: value)))
+                            }
+                        )) {
+                            let options = model.thinkingOptions.filter { $0 == "off" } + model.thinkingOptions.filter { $0 != "off" }
+                            ForEach(options, id: \.self) { Text($0.thinkingOptionLabel).tag($0) }
+                        }
+                    } else {
+                        LabeledContent("默认思考", value: model.thinkingKind == .unsupported ? "不支持" : model.defaultThinking.thinkingOptionLabel)
+                    }
+                } else {
+                    LabeledContent("默认思考", value: "先选默认模型")
+                }
+            } footer: {
+                Text("跟随默认模型可选的档位。")
+            }
+        }
+        .navigationTitle("默认配置")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if isSaving {
+                ToolbarItem(placement: .primaryAction) { ProgressView() }
+            }
+        }
+        .task {
+            if config == nil { config = try? await client.configDefaults() }
+        }
+        .alert(
+            "保存失败",
+            isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
+        ) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func save(_ patch: ServerConfigPatch) {
+        Task {
+            isSaving = true
+            defer { isSaving = false }
+            do {
+                let updated = try await client.updateConfig(patch)
+                config = updated
+                await onSaved(updated)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// 默认模型列表：按来源分组（组名是分组标题），勾选当前默认，点一下保存并返回。
+private struct DefaultModelList: View {
+    let groups: [(label: String, models: [ModelInfo])]
+    let selected: String?
+    let select: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        List {
+            ForEach(groups, id: \.label) { group in
+                Section(group.label) {
+                    ForEach(group.models) { model in
+                        Button {
+                            if model.model != selected { select(model.model) }
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text(model.name)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if model.model == selected {
+                                    Image(systemName: "checkmark")
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(Palette.kimi)
+                                }
+                            }
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("默认模型")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

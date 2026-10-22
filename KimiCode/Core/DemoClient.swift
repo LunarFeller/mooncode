@@ -58,6 +58,8 @@ extension DemoClient: KapServicing {
 
     func configDefaults() async throws -> ServerConfigDefaults { DemoData.configDefaults }
 
+    func updateConfig(_: ServerConfigPatch) async throws -> ServerConfigDefaults { throw DemoData.readOnly }
+
     // 体验模式只展示 Kimi 订阅，不能增删改供应商。
     func providers() async throws -> [ProviderItem] { [DemoData.provider] }
 

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 点模型或思考强度立刻写入会话（自动保存），左上角 ✕ 或下滑关闭；右上角 ⚙︎ 管理模型供应商。
+/// 模型列表：点模型立刻写入会话（自动保存），右上角 ⚙︎ 管理模型供应商。
+/// 作为 `ModelPanel` 的子页时左上角是返回（`onBack`），单独弹出时是 ✕。
 struct ModelSelectionPanel: View {
     let models: [ModelInfo]
     let apply: (ModelInfo, String?) -> Void
@@ -9,6 +10,8 @@ struct ModelSelectionPanel: View {
     var client: (any KapServicing)?
     /// 供应商改完后重拉模型列表。
     var onProvidersChanged: () async -> Void = {}
+    /// 有它时左上角是返回箭头，没有时是 ✕ 关闭。
+    var onBack: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var showsSettings = false
@@ -23,8 +26,10 @@ struct ModelSelectionPanel: View {
         apply: @escaping (ModelInfo, String?) -> Void,
         onHeight: ((CGFloat) -> Void)? = nil,
         client: (any KapServicing)? = nil,
-        onProvidersChanged: @escaping () async -> Void = {}
+        onProvidersChanged: @escaping () async -> Void = {},
+        onBack: (() -> Void)? = nil
     ) {
+        self.onBack = onBack
         self.models = models
         self.apply = apply
         self.onHeight = onHeight
@@ -60,14 +65,14 @@ struct ModelSelectionPanel: View {
                 Text("模型")
                     .font(.headline)
                 HStack {
-                    Button(action: { dismiss() }) {
-                        Image(systemName: "xmark")
+                    Button(action: { if let onBack { onBack() } else { dismiss() } }) {
+                        Image(systemName: onBack == nil ? "xmark" : "chevron.backward")
                             .font(.body.weight(.medium))
                             .frame(width: 32, height: 32)
                     }
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
-                    .accessibilityLabel("关闭")
+                    .accessibilityLabel(onBack == nil ? "关闭" : "返回")
                     Spacer()
                     if client != nil {
                         Button(action: { showsSettings = true }) {
@@ -98,11 +103,6 @@ struct ModelSelectionPanel: View {
                 }
             }
 
-            if let model = selectedModel, model.thinkingOptions.count > 1 {
-                thinkingMenu(for: model)
-                    .padding(.horizontal, 24)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
 
         }
         .padding(.bottom, 28)
@@ -134,13 +134,10 @@ struct ModelSelectionPanel: View {
             let groups = groups
             VStack(alignment: .leading, spacing: 16) {
                 ForEach(groups, id: \.label) { group in
-                    VStack(alignment: .leading, spacing: 8) {
-                        // 只有 Kimi 订阅一组时不显示组名，和以前一样。
+                    VStack(alignment: .leading, spacing: 10) {
+                        // 来源分组名是一级标题（同用量面板卡片上方的灰色小标题）。只有一组时不显示。
                         if groups.count > 1 {
-                            Text(group.label)
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 20)
+                            sectionTitle(group.label)
                         }
                         VStack(spacing: 0) {
                             ForEach(group.models) { model in
@@ -163,31 +160,12 @@ struct ModelSelectionPanel: View {
         }
     }
 
-    /// 固定在模型列表下方的分段控件，从左到右低 → 高，点一下即生效。
-    /// 不用弹出菜单：iOS 26 的菜单会从整行胶囊「变形」出来、盖住模型列表，观感很怪。
-    private func thinkingMenu(for model: ModelInfo) -> some View {
-        let title = model.efforts.isEmpty ? "思考" : "思考强度"
-        let current = model.normalizedThinking(selectedEffort)
-        return VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.body.weight(.medium))
-            Picker(title, selection: Binding(
-                get: { current },
-                set: {
-                    selectedEffort = $0
-                    applySelection()
-                }
-            )) {
-                ForEach(model.thinkingOptions, id: \.self) { option in
-                    Text(option.thinkingOptionLabel).tag(option)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
+    /// 一级标题：同用量面板卡片上方的灰色小标题。
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
     }
 
     private func choiceRow(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
