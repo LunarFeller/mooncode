@@ -7,6 +7,15 @@ struct ChatScreen: View {
     @Environment(AppModel.self) private var app
     @State private var isAddingWorkspace = false
     @State private var confirmedEmptyDeviceID: String?
+    /// 加载中的小脸与对话页欢迎语里的小脸是同一个：数据到了就从这里滑到对话页的位置。
+    @Namespace private var face
+    @State private var isBootFaceShown = false
+
+    /// 还在拉设备 / 设备数据：中间只放 Kimi 小脸，其他界面等数据到了再出来。
+    private var isBooting: Bool {
+        if !app.hasLoadedDevices || app.isLoadingDevices { return true }
+        return !app.onlineDevices.isEmpty && app.chat == nil && confirmedEmptyDeviceID == nil
+    }
 
     private var emptyWorkspaceDeviceID: String? {
         guard app.hasLoadedDevices, !app.isLoadingDevices,
@@ -18,12 +27,14 @@ struct ChatScreen: View {
     var body: some View {
         Group {
             if let chat = app.chat {
-                ChatContent(chat: chat)
+                ChatContent(chat: chat, face: face)
                     .id(chat.sessionID ?? "draft:\(chat.workspace?.id ?? "")")
+                    .transition(.opacity)
             } else {
                 placeholder
             }
         }
+        .animation(.smooth(duration: 0.5), value: app.chat == nil)
         // 顶部不显示会话标题。
         .navigationBarTitleDisplayMode(.inline)
         .task(id: emptyWorkspaceDeviceID) {
@@ -64,8 +75,16 @@ struct ChatScreen: View {
 
     @ViewBuilder
     private var placeholder: some View {
-        if !app.hasLoadedDevices || app.isLoadingDevices {
-            ProgressView()
+        if isBooting {
+            // 欢迎语的位置先空着；底部让出大约一个输入框的高度，小脸和对话页里的落点基本一致。
+            WelcomeHero(face: face) { Text(verbatim: " ") }
+                .safeAreaPadding(.bottom, 96)
+                .scaleEffect(isBootFaceShown ? 1 : 0.6)
+                .opacity(isBootFaceShown ? 1 : 0)
+                .onAppear {
+                    withAnimation(.spring(duration: 0.6, bounce: 0.3)) { isBootFaceShown = true }
+                }
+                .allowsHitTesting(false)
         } else if app.onlineDevices.isEmpty {
             ContentUnavailableView {
                 Label("没有在线的设备", systemImage: "laptopcomputer.slash")
@@ -104,13 +123,18 @@ struct ChatScreen: View {
 
 /// 空白对话中间的欢迎：会动的 Kimi 小脸 + 一句话。
 struct WelcomeHero<Message: View>: View {
+    /// 传入时小脸和加载中的那个做位置衔接。
+    var face: Namespace.ID? = nil
     @ViewBuilder var message: Message
+
+    @Namespace private var ownFace
 
     var body: some View {
         VStack(spacing: 28) {
             KimiFace(animating: true)
                 .scaleEffect(3)
                 .frame(width: 72, height: 48)
+                .matchedGeometryEffect(id: "kimiFace", in: face ?? ownFace)
             message
                 .font(.title2.weight(.bold))
                 .multilineTextAlignment(.center)
@@ -126,6 +150,7 @@ struct WelcomeHero<Message: View>: View {
 /// 一条对话的正文 + composer。
 private struct ChatContent: View {
     let chat: ChatModel
+    let face: Namespace.ID
 
     @Environment(AppModel.self) private var app
     @State private var draft = ""
@@ -158,7 +183,7 @@ private struct ChatContent: View {
             .overlay {
                 // 新对话还没发任何东西：中间放欢迎语。
                 if chat.isDraft, chat.entries.isEmpty, chat.optimisticPrompts.isEmpty {
-                    WelcomeHero {
+                    WelcomeHero(face: face) {
                         Text("你来啦，在\(chat.workspace?.displayName ?? "这里")里开始创造吧")
                     }
                     .allowsHitTesting(false)
