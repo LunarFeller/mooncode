@@ -218,9 +218,11 @@ private struct ChatContent: View {
                     // 手指一放上去就停止跟随：回答生成中也能往上翻，不会被新内容拽回底部。
                     isFollowing = false
                 case .idle:
-                    // 滑完停在底部附近才恢复跟随。visibleRect 已经算上了底部 composer 的 inset。
+                    // 滑完停在底部附近才恢复跟随。visibleRect 是整个视口、含 composer 盖住的那截，
+                    // 贴底时 maxY = 内容高 + 底部 inset；不减掉 inset，往上翻 200 多点松手也会被拽回去。
                     let geometry = context.geometry
-                    isFollowing = geometry.visibleRect.maxY >= geometry.contentSize.height - 80
+                    let bottom = geometry.contentSize.height + geometry.contentInsets.bottom
+                    isFollowing = geometry.visibleRect.maxY >= bottom - 80
                 default:
                     break
                 }
@@ -242,7 +244,12 @@ private struct ChatContent: View {
             }
             // 一轮结束时「工作中」那行换成页脚，高度会变，再贴一次底。
             .onChange(of: chat.isWorking) { if isFollowing { scrollToBottom() } }
-            .onChange(of: chat.optimisticPrompts.count) { scrollToBottom() }
+            .onChange(of: chat.optimisticPrompts.count) { old, new in
+                // 自己刚发出一条：不管停在哪都回到底部看它。
+                guard new > old else { return }
+                isFollowing = true
+                scrollToBottom()
+            }
         }
         // 用 safeAreaBar 而不是 safeAreaInset：只有前者参与 iOS 26 的滚动边缘效果，
         // 正文滚到 composer 后面时会像导航栏那样渐隐模糊。
@@ -329,6 +336,8 @@ private struct ChatContent: View {
     /// 所以下一轮主线程滚一次，布局稳定后（约 0.15s）再补一次。
     private func scrollToBottom(animated: Bool = true) {
         let scroll = {
+            // 排队的这一下执行前手指可能已经放上来了，别把正在往上翻的人拽回去。
+            guard isFollowing else { return }
             if animated {
                 withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) }
             } else {
