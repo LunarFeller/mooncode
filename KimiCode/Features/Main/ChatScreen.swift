@@ -160,7 +160,20 @@ private struct ChatContent: View {
     @State private var undoTarget: UserEntry?
     /// 停在底部时新内容自动跟随（官方 isFollowing）；往上翻了就不打扰。
     @State private var isFollowing = true
+    /// 首屏历史到了才显示正文，并且只淡入透明度：布局先一次排好，文字不会跟着滑。
+    @State private var isRevealed: Bool
     @State private var scrollPosition = ScrollPosition(edge: .bottom)
+
+    init(chat: ChatModel, face: Namespace.ID) {
+        self.chat = chat
+        self.face = face
+        _isRevealed = State(initialValue: !Self.isAwaitingHistory(chat))
+    }
+
+    /// 已有会话、正文还是空的：首屏历史还没到（ChatModel 刚建好时 isLoading 还没置上，不能靠它）。
+    private static func isAwaitingHistory(_ chat: ChatModel) -> Bool {
+        !chat.isDraft && chat.entries.isEmpty && chat.optimisticPrompts.isEmpty
+    }
 
     var body: some View {
         Group {
@@ -175,6 +188,7 @@ private struct ChatContent: View {
                     ConversationList(chat: chat, ui: ui) { entry in
                         undoTarget = entry
                     }
+                    .opacity(isRevealed ? 1 : 0)
                 }
                 .padding(.horizontal)
                 .padding(.top, 12)
@@ -222,6 +236,10 @@ private struct ChatContent: View {
                 }
             )
             .onChange(of: chat.contentVersion) { if isFollowing { scrollToBottom(animated: false) } }
+            .onChange(of: Self.isAwaitingHistory(chat)) { _, waiting in
+                guard !waiting, !isRevealed else { return }
+                withAnimation(.easeOut(duration: 0.3)) { isRevealed = true }
+            }
             // 一轮结束时「工作中」那行换成页脚，高度会变，再贴一次底。
             .onChange(of: chat.isWorking) { if isFollowing { scrollToBottom() } }
             .onChange(of: chat.optimisticPrompts.count) { scrollToBottom() }
