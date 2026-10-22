@@ -300,6 +300,9 @@ private struct ChatContent: View {
             chat.restoredDraft = nil
         }
         .refreshable { await chat.reload() }
+        .environment(\.addToComposer) { text in
+            draft += text + " "
+        }
         .environment(\.openFilePreview) { entry in
             if fileSessionID != nil { previewingFile = entry }
         }

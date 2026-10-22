@@ -28,11 +28,13 @@ struct SelectableText: UIViewRepresentable {
         view.dataDetectorTypes = []
         view.linkTextAttributes = [.foregroundColor: Palette.uiKimi]
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.delegate = context.coordinator
         return view
     }
 
     func updateUIView(_ view: SelectableTextView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.addToComposer = context.environment.addToComposer
         let key = Coordinator.Key(content: content, dynamicTypeSize: context.environment.dynamicTypeSize)
         if coordinator.key != key {
             coordinator.key = key
@@ -74,7 +76,7 @@ struct SelectableText: UIViewRepresentable {
         return size
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, UITextViewDelegate {
         struct Key: Equatable {
             let content: RichText
             let dynamicTypeSize: DynamicTypeSize
@@ -87,7 +89,59 @@ struct SelectableText: UIViewRepresentable {
 
         var key: Key?
         var sizes: [SizeKey: CGSize] = [:]
+        var addToComposer: ((String) -> Void)?
+
+        /// 长按菜单：拷贝 → 添加到会话框 → 搜索网页 排最前，「查询」去掉，其余照系统的。
+        /// 没有输入框（拿不到回调）时原样不动。
+        /// 自定义项不能塞进系统的 lookup 组（塞进去不显示），所以把要排前面的几项拎出来单放。
+        /// 模拟器里没有「搜索网页」，选择器名没法实测，按选择器和标题两样认。
+        func textView(
+            _ textView: UITextView,
+            editMenuForTextIn range: NSRange,
+            suggestedActions: [UIMenuElement]
+        ) -> UIMenu? {
+            guard let addToComposer, range.length > 0,
+                  let text = (textView.text as NSString?)?.substring(with: range) else { return nil }
+            let add = UIAction(title: "添加到会话框", image: UIImage(systemName: "text.badge.plus")) { [weak textView] _ in
+                addToComposer(text)
+                _ = textView?.resignFirstResponder()
+            }
+            var copy: UICommand?
+            var searchWeb: UICommand?
+            let rest = Self.filter(suggestedActions) { command in
+                let name = NSStringFromSelector(command.action)
+                if command.action == #selector(UIResponderStandardEditActions.copy(_:)) {
+                    copy = command
+                } else if name.localizedCaseInsensitiveContains("searchWeb")
+                            || ["搜索网页", "Search Web"].contains(command.title) {
+                    searchWeb = command
+                } else if name != "_define:" {
+                    return true
+                }
+                return false
+            }
+            let front: [UIMenuElement] = [copy, add, searchWeb].compactMap { $0 }
+            return UIMenu(children: [UIMenu(options: .displayInline, children: front)] + rest)
+        }
+
+        /// 逐层过滤系统菜单里的命令（「查询」「搜索网页」都嵌在子菜单里）。
+        private static func filter(_ elements: [UIMenuElement], keep: (UICommand) -> Bool) -> [UIMenuElement] {
+            elements.compactMap { element in
+                if let command = element as? UICommand {
+                    return keep(command) ? command : nil
+                }
+                if let menu = element as? UIMenu {
+                    return menu.replacingChildren(filter(menu.children, keep: keep))
+                }
+                return element
+            }
+        }
     }
+}
+
+extension EnvironmentValues {
+    /// 正文长按菜单「添加到会话框」：把选中的字放进输入框。
+    @Entry var addToComposer: ((String) -> Void)?
 }
 
 final class SelectableTextView: UITextView {
