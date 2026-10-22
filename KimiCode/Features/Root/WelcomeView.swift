@@ -1,17 +1,18 @@
 import SwiftUI
 
-/// 首屏三步：欢迎（下一步）→ 在终端运行 kimi rc（我已完成）→ 登录。前两步逐字出现，打完才出按钮。
+/// 首屏：欢迎（下一步）→ 选用的是 CLI 还是桌面端 → CLI：在终端运行 kimi rc / 桌面端：看示例动画在设置里打开远程控制
+/// （我已完成）→ 登录。登录前的每步逐字出现，打完才出按钮；回到看过的一步不再重打。
 /// 第一次出现时先放开场动效（`SplashFace`）。
 struct WelcomeView: View {
-    private enum Step { case intro, terminal, login }
+    private enum Step { case intro, choose, terminal, desktop, login }
     private enum Splash { case cover, shrunk }
 
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var step = Step.intro
     @State private var revealedCharacters = 0
-    /// 文字已经全部打出来的那一步；登录页没有逐字动画。
-    @State private var typedStep: Step?
+    /// 文字已经全部打出来的步骤；登录页没有逐字动画。
+    @State private var typedSteps: Set<Step> = []
     @State private var splash = Splash.cover
     /// 启动画面是系统默认的白底：开场先从白快速渐变成整屏蓝，再出眼睛。
     @State private var blueShown = false
@@ -26,19 +27,27 @@ struct WelcomeView: View {
 
     private let welcome = "欢迎来到Moon Code！"
     private let tagline = "KimiCode的远程控制客户端"
+    private let chooseTitle = "你使用的是哪个"
+    private let chooseSubtitle = "Kimi Code？"
     private let instruction = "请你在任意终端运行"
+    private let desktopTitle = "在 Kimi Code 桌面端"
+    private let desktopSubtitle = "打开远程控制"
     private let command = "kimi rc"
 
     private var auth: AuthStore { model.auth }
     private var isWorking: Bool { auth.isPreparing || auth.isSigningIn }
     private var isLogin: Bool { step == .login }
-    private var isTyped: Bool { isLogin || typedStep == step }
+    private var isTyped: Bool { isLogin || typedSteps.contains(step) }
     private var showsSplash: Bool { !model.hasPlayedSplash && !reduceMotion }
 
-    private var lines: [String] {
+    private var lines: [String] { lines(for: step) }
+
+    private func lines(for step: Step) -> [String] {
         switch step {
         case .intro: [welcome, tagline]
+        case .choose: [chooseTitle, chooseSubtitle]
         case .terminal: [instruction, command]
+        case .desktop: [desktopTitle, desktopSubtitle]
         case .login: []
         }
     }
@@ -75,6 +84,10 @@ struct WelcomeView: View {
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(welcome)\n\(tagline)")
                         .transition(.opacity)
+                    case .choose:
+                        twoLines(chooseTitle, chooseSubtitle)
+                    case .desktop:
+                        twoLines(desktopTitle, desktopSubtitle)
                     case .terminal:
                         VStack(spacing: 20) {
                             Text(streamed(instruction, offset: 0))
@@ -99,7 +112,15 @@ struct WelcomeView: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                Spacer(minLength: 40)
+                if step == .desktop {
+                    DesktopRemoteDemo()
+                        .frame(maxWidth: 420)
+                        .padding(.top, 8)
+                        .opacity(isTyped ? 1 : 0)
+                        .transition(.opacity)
+                }
+
+                Spacer(minLength: step == .desktop ? 24 : 40)
 
                 VStack(spacing: 18) {
                     if let error = auth.lastError, isLogin {
@@ -109,11 +130,17 @@ struct WelcomeView: View {
                             .multilineTextAlignment(.center)
                     }
 
+                    if step == .choose {
+                        choice("Kimi Code 桌面端", icon: "KimiCodeDesktopIcon") { go(to: .desktop) }
+                        choice("Kimi Code CLI", icon: "KimiCodeCLIIcon") { go(to: .terminal) }
+                    } else {
                     Button {
                         switch step {
                         case .intro:
-                            go(to: .terminal)
-                        case .terminal:
+                            go(to: .choose)
+                        case .choose:
+                            break
+                        case .terminal, .desktop:
                             auth.prepareSignIn()
                             go(to: .login)
                         case .login:
@@ -138,6 +165,7 @@ struct WelcomeView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(isLogin && isWorking)
+                    }
 
                     if isLogin {
                         // 不登录进体验模式：界面全功能可点，数据来自本地演示后端（App Store 审核用）。
@@ -165,6 +193,22 @@ struct WelcomeView: View {
             }
             .padding(.horizontal, 28)
             .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .overlay(alignment: .topLeading) {
+            if step == .terminal || step == .desktop {
+                Button {
+                    go(to: .choose)
+                } label: {
+                    Image(systemName: "chevron.backward")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .accessibilityLabel("返回")
+                .padding(.leading, 16)
+                .transition(.opacity)
+            }
         }
         .background {
             ZStack {
@@ -206,8 +250,8 @@ struct WelcomeView: View {
         .statusBarHidden(showsSplash)
         .sensoryFeedback(.impact(weight: .medium), trigger: landed)
         .sensoryFeedback(.success, trigger: confettiBursts)
-        // 逐字打出时每个字轻震一下，像在敲键盘；换步清零时不震
-        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: revealedCharacters) { old, new in new > old }
+        // 逐字打出时每个字轻震一下，像在敲键盘；换步清零、回到打过的一步时不震
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: revealedCharacters) { old, new in new == old + 1 }
         .animation(.default, value: auth.lastError)
         .task(id: step) {
             if showsSplash { await playSplash() }
@@ -215,7 +259,7 @@ struct WelcomeView: View {
             let total = lines.reduce(0) { $0 + $1.count }
             if reduceMotion {
                 revealedCharacters = total
-                typedStep = step
+                typedSteps.insert(step)
                 return
             }
             while revealedCharacters < total {
@@ -226,14 +270,15 @@ struct WelcomeView: View {
                     await celebrate()
                 }
             }
-            withAnimation(.easeIn(duration: 0.3)) { typedStep = step }
+            withAnimation(.easeIn(duration: 0.3)) { _ = typedSteps.insert(step) }
         }
     }
 
     private var buttonTitle: String {
         switch step {
         case .intro: "下一步"
-        case .terminal: "我已完成"
+        case .choose: ""
+        case .terminal, .desktop: "我已完成"
         case .login: "登录 Kimi 账号"
         }
     }
@@ -271,12 +316,55 @@ struct WelcomeView: View {
         }
     }
 
-    /// 换步时同时清零逐字进度，新一步的文字不会先整段闪一下。
+    /// 换步时同时清零逐字进度，新一步的文字不会先整段闪一下；打过的一步直接整段显示。
     private func go(to next: Step) {
         withAnimation(.smooth(duration: 0.3)) {
-            revealedCharacters = 0
+            // 别用 .max：触感回调里的 old + 1 会溢出闪退
+            revealedCharacters = typedSteps.contains(next) ? lines(for: next).reduce(0) { $0 + $1.count } : 0
             step = next
         }
+    }
+
+    private func twoLines(_ first: String, _ second: String) -> some View {
+        VStack(spacing: 10) {
+            Text(streamed(first, offset: 0))
+                .font(.system(size: 26, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(streamed(second, offset: first.count))
+                .font(.system(size: 26, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .multilineTextAlignment(.center)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(first)\n\(second)")
+        .transition(.opacity)
+    }
+
+    /// 「桌面端 / CLI」二选一的卡片。图标：桌面端取自 Kimi Code App，CLI 用 MoonshotAI 的 GitHub 头像。
+    private func choice(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(icon)
+                    .resizable()
+                    .frame(width: 44, height: 44)
+                    .clipShape(.rect(cornerRadius: 10, style: .continuous))
+                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+                    .accessibilityHidden(true)
+                Text(title).font(.body.weight(.semibold))
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.forward")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16)
+            .frame(height: 72)
+            .background(Color(.tertiarySystemFill), in: .rect(cornerRadius: 24))
+            .contentShape(.rect(cornerRadius: 24))
+        }
+        .buttonStyle(.plain)
     }
 
     /// 保留未显示字符的排版空间，逐字出现时不会挤动 bot 和按钮。

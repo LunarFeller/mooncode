@@ -1,23 +1,40 @@
 import SwiftUI
 
-/// 选择暂存在面板内，只有点完成才写入会话；下滑关闭即放弃修改。
+/// 模型列表：点模型立刻写入会话（自动保存），右上角 ⚙︎ 管理模型供应商。
+/// 作为 `ModelPanel` 的子页时左上角是返回（`onBack`），单独弹出时是 ✕。
 struct ModelSelectionPanel: View {
     let models: [ModelInfo]
-    let confirm: (ModelInfo, String?) -> Void
+    let apply: (ModelInfo, String?) -> Void
     var onHeight: ((CGFloat) -> Void)?
+    /// 有它才显示 ⚙︎：读写电脑上的供应商配置。
+    var client: (any KapServicing)?
+    /// 供应商改完后重拉模型列表。
+    var onProvidersChanged: () async -> Void = {}
+    /// 有它时左上角是返回箭头，没有时是 ✕ 关闭。
+    var onBack: (() -> Void)?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var showsSettings = false
 
     @State private var selectedID: String?
     @State private var selectedEffort: String?
+    @State private var listHeight: CGFloat = 0
 
     init(
         models: [ModelInfo],
         config: ComposerConfig,
-        confirm: @escaping (ModelInfo, String?) -> Void,
-        onHeight: ((CGFloat) -> Void)? = nil
+        apply: @escaping (ModelInfo, String?) -> Void,
+        onHeight: ((CGFloat) -> Void)? = nil,
+        client: (any KapServicing)? = nil,
+        onProvidersChanged: @escaping () async -> Void = {},
+        onBack: (() -> Void)? = nil
     ) {
+        self.onBack = onBack
         self.models = models
-        self.confirm = confirm
+        self.apply = apply
         self.onHeight = onHeight
+        self.client = client
+        self.onProvidersChanged = onProvidersChanged
         _selectedID = State(initialValue: config.modelID)
         _selectedEffort = State(initialValue: config.effort)
     }
@@ -26,108 +43,129 @@ struct ModelSelectionPanel: View {
         models.first { $0.model == selectedID }
     }
 
+    /// 按 provider 分组，组的顺序沿用列表顺序（Kimi 订阅组已排在最前）。
+    private var groups: [(label: String, models: [ModelInfo])] {
+        var result: [(label: String, models: [ModelInfo])] = []
+        for model in models {
+            if let index = result.firstIndex(where: { $0.label == model.providerLabel }) {
+                result[index].models.append(model)
+            } else {
+                result.append((model.providerLabel, [model]))
+            }
+        }
+        return result
+    }
+
+    /// 模型多了（第三方 provider）列表会很长：超过这个高度就在面板里滚动。
+    private static let maxListHeight: CGFloat = 440
+
     var body: some View {
         VStack(spacing: 20) {
-            Text("模型")
-                .font(.headline)
-                .padding(.top, 28)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    if models.isEmpty {
-                        Text("暂无可用模型")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        VStack(spacing: 0) {
-                            ForEach(models) { model in
-                                if model.id != models.first?.id {
-                                    Divider().padding(.horizontal, 20)
-                                }
-                                choiceRow(model.name, selected: selectedID == model.model) {
-                                    selectedID = model.model
-                                    if !model.efforts.contains(selectedEffort ?? "") {
-                                        selectedEffort = model.defaultEffort
-                                    }
-                                }
-                            }
-                        }
-                        .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 24))
+            ZStack {
+                Text("模型")
+                    .font(.headline)
+                HStack {
+                    Button(action: { if let onBack { onBack() } else { dismiss() } }) {
+                        Image(systemName: onBack == nil ? "xmark" : "chevron.backward")
+                            .font(.body.weight(.medium))
+                            .frame(width: 32, height: 32)
                     }
-
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .accessibilityLabel(onBack == nil ? "关闭" : "返回")
+                    Spacer()
+                    if client != nil {
+                        Button(action: { showsSettings = true }) {
+                            Image(systemName: "gearshape")
+                                .font(.body.weight(.medium))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .accessibilityLabel("管理模型供应商")
+                    }
                 }
-                .padding(.horizontal, 24)
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
 
-            if let model = selectedModel, !model.efforts.isEmpty {
-                effortMenu(for: model)
-                    .padding(.horizontal, 24)
-                    .fixedSize(horizontal: false, vertical: true)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    modelList
+                        .padding(.horizontal, 24)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listHeight = $0 }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(height: min(listHeight, Self.maxListHeight))
+                .onAppear {
+                    guard let selectedID else { return }
+                    proxy.scrollTo(selectedID, anchor: .center)
+                }
             }
 
-            Button {
-                guard let model = selectedModel else { return }
-                confirm(model, effectiveEffort(for: model))
-            } label: {
-                Text("完成")
-                    .font(.body.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .foregroundStyle(.white)
-                    .background(Palette.kimi, in: .capsule)
-            }
-            .buttonStyle(.plain)
-            .opacity(selectedModel == nil ? 0.4 : 1)
-            .disabled(selectedModel == nil)
-            .padding(.horizontal, 24)
-            .padding(.bottom, 16)
+
         }
+        .padding(.bottom, 28)
         // 面板高度按内容算（交给外面设 detent），不留大片空白。
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeight?($0) }
-        .background(Color(.systemBackground))
+        .background(Color(.systemGroupedBackground))
+        .sheet(isPresented: $showsSettings) {
+            if let client {
+                ProviderSettingsSheet(client: client, onChange: onProvidersChanged)
+                    .presentationDetents([.large])
+            }
+        }
     }
 
-    private func effectiveEffort(for model: ModelInfo) -> String? {
-        if let selectedEffort, model.efforts.contains(selectedEffort) { return selectedEffort }
-        if let fallback = model.defaultEffort, model.efforts.contains(fallback) { return fallback }
-        return model.efforts.first
+    /// 自动保存：每次改动直接写入会话。
+    private func applySelection() {
+        guard let model = selectedModel else { return }
+        apply(model, model.normalizedThinking(selectedEffort))
     }
 
-    /// 固定在模型列表下方，点击整行弹出原生单选菜单。
-    private func effortMenu(for model: ModelInfo) -> some View {
-        Menu {
-            Picker("思考强度", selection: Binding(
-                get: { effectiveEffort(for: model) ?? "" },
-                set: { selectedEffort = $0 }
-            )) {
-                ForEach(model.efforts, id: \.self) { effort in
-                    Text(effort.effortLabel).tag(effort)
+    @ViewBuilder
+    private var modelList: some View {
+        if models.isEmpty {
+            Text("暂无可用模型")
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+        } else {
+            let groups = groups
+            VStack(alignment: .leading, spacing: 16) {
+                ForEach(groups, id: \.label) { group in
+                    VStack(alignment: .leading, spacing: 10) {
+                        // 来源分组名是一级标题（同用量面板卡片上方的灰色小标题）。只有一组时不显示。
+                        if groups.count > 1 {
+                            sectionTitle(group.label)
+                        }
+                        VStack(spacing: 0) {
+                            ForEach(group.models) { model in
+                                if model.id != group.models.first?.id {
+                                    Divider().padding(.horizontal, 20)
+                                }
+                                choiceRow(model.name, selected: selectedID == model.model) {
+                                    guard selectedID != model.model else { return }
+                                    selectedID = model.model
+                                    selectedEffort = model.normalizedThinking(selectedEffort)
+                                    applySelection()
+                                }
+                                .id(model.model)
+                            }
+                        }
+                        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
+                    }
                 }
             }
-            .pickerStyle(.inline)
-        } label: {
-            HStack(spacing: 12) {
-                Text("思考强度")
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 12)
-                Text(effectiveEffort(for: model)?.effortLabel ?? "")
-                    .foregroundStyle(.secondary)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .font(.body.weight(.medium))
-            .padding(.horizontal, 20)
-            .frame(minHeight: 52)
-            .background(Color(.secondarySystemBackground), in: .capsule)
-            .contentShape(.capsule)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("思考强度")
-        .accessibilityValue(effectiveEffort(for: model)?.effortLabel ?? "")
+    }
+
+    /// 一级标题：同用量面板卡片上方的灰色小标题。
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
     }
 
     private func choiceRow(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {

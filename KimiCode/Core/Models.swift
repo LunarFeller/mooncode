@@ -593,6 +593,123 @@ struct FsBrowse: Decodable, Sendable {
     }
 }
 
+/// `POST /sessions/{id}/fs:list`：会话目录（workDir）里某一层的文件和文件夹。
+/// `path` 都是相对 workDir 的，`"."` 是根目录；服务端已按 `.gitignore` 过滤、文件夹在前排好序。
+struct FsList: Decodable, Sendable {
+    let items: [FsEntry]
+    let truncated: Bool
+
+    enum CodingKeys: String, CodingKey { case items, truncated }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        items = (try? c.decodeIfPresent([FsEntry].self, forKey: .items)) ?? []
+        truncated = (try? c.decodeIfPresent(Bool.self, forKey: .truncated)) ?? false
+    }
+}
+
+struct FsEntry: Decodable, Identifiable, Hashable, Sendable {
+    enum Kind: String, Decodable, Sendable { case file, directory, symlink }
+
+    let path: String
+    let name: String
+    let kind: Kind
+    let size: Int?
+    let childCount: Int?
+    let mime: String?
+    let isBinary: Bool?
+
+    var id: String { path }
+    var isDirectory: Bool { kind == .directory }
+
+    enum CodingKeys: String, CodingKey {
+        case path, name, kind, size, mime
+        case childCount = "child_count"
+        case isBinary = "is_binary"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        name = try c.decode(String.self, forKey: .name)
+        kind = (try? c.decode(Kind.self, forKey: .kind)) ?? .file
+        size = try? c.decodeIfPresent(Int.self, forKey: .size)
+        childCount = try? c.decodeIfPresent(Int.self, forKey: .childCount)
+        mime = try? c.decodeIfPresent(String.self, forKey: .mime)
+        isBinary = try? c.decodeIfPresent(Bool.self, forKey: .isBinary)
+    }
+}
+
+extension FsEntry {
+    /// 从对话里的文件提及还原：只知道路径和名字，大小等留空（太大时由 `fs:read` 的 41302 兜底）。
+    init(path: String, name: String) {
+        self.path = path
+        self.name = name
+        kind = .file
+        size = nil
+        childCount = nil
+        mime = nil
+        isBinary = nil
+    }
+
+    /// 网页端「提及」文件的写法（`rv`）：`[名字](相对路径)`。名字转义 `% & < > [ ] \` 和换行（`a6`），
+    /// 路径逐段把 ASCII 里非 unreserved 的字符百分号编码，中文等原样保留（`i9e` / `ug`）。
+    var mentionMarkdown: String {
+        let label = name
+            .replacingOccurrences(of: "%", with: "%25")
+            .replacingOccurrences(of: "&", with: "%26")
+            .replacingOccurrences(of: "<", with: "%3C")
+            .replacingOccurrences(of: ">", with: "%3E")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
+            .replacingOccurrences(of: "\n", with: "%0A")
+            .replacingOccurrences(of: "\r", with: "%0D")
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        func encode(_ segment: Substring) -> String {
+            segment.unicodeScalars.map { scalar in
+                scalar.value > 127 || unreserved.contains(scalar)
+                    ? String(scalar)
+                    : String(format: "%%%02X", scalar.value)
+            }.joined()
+        }
+        var target = (isDirectory && !path.hasSuffix("/") ? path + "/" : path)
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map(encode)
+            .joined(separator: "/")
+        if target.hasPrefix("//") { target = "/%2F" + target.dropFirst(2) }
+        return "[\(label)](\(target))"
+    }
+
+}
+
+/// `POST /sessions/{id}/fs:read`：文件开头的一段文本或 base64。
+struct FsContent: Decodable, Sendable {
+    let path: String
+    let content: String
+    let encoding: String
+    let size: Int
+    let truncated: Bool
+    let mime: String?
+    let isBinary: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case path, content, encoding, size, truncated, mime
+        case isBinary = "is_binary"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        content = try c.decode(String.self, forKey: .content)
+        encoding = try c.decode(String.self, forKey: .encoding)
+        size = try c.decode(Int.self, forKey: .size)
+        truncated = (try? c.decodeIfPresent(Bool.self, forKey: .truncated)) ?? false
+        mime = try? c.decodeIfPresent(String.self, forKey: .mime)
+        isBinary = (try? c.decodeIfPresent(Bool.self, forKey: .isBinary)) ?? false
+    }
+}
+
 /// `GET /fs:home`：那台电脑的主目录。
 struct FsHome: Decodable, Sendable {
     let home: String
@@ -620,8 +737,45 @@ struct ModelInfo: Decodable, Identifiable, Hashable, Sendable {
     var name: String { displayName ?? (model as NSString).lastPathComponent }
     var acceptsImages: Bool { capabilities?.contains("image_in") ?? false }
     var efforts: [String] { supportEfforts ?? [] }
-    /// 属于「Kimi 订阅」组。App 只提供这一组，别的 provider（如 opencode-go）一律不列。
+    /// 属于「Kimi 订阅」组（排在最前、组名显示「Kimi 订阅」）。
     var isKimiSubscription: Bool { provider == KimiConfig.kimiSubscriptionProvider }
+    /// 分组名：Kimi 订阅组用中文名，其他 provider 照原样显示（与网页端 `Bl` 一致）。
+    var providerLabel: String { isKimiSubscription ? "Kimi 订阅" : provider }
+
+    /// 思考方式，照网页端 `ov`：`always_thinking` 恒开；有 `thinking` 可开关；都没有则不思考。
+    enum ThinkingKind { case alwaysOn, toggle, unsupported }
+
+    var thinkingKind: ThinkingKind {
+        let caps = capabilities ?? []
+        if caps.contains("always_thinking") { return .alwaysOn }
+        return caps.contains("thinking") ? .toggle : .unsupported
+    }
+
+    /// 可选的 `thinking` 取值，照网页端 `sv`：有强度时是强度（可关的模型前面加 `off`），
+    /// 没强度时是 `on` / `off`。
+    var thinkingOptions: [String] {
+        switch (thinkingKind, efforts.isEmpty) {
+        case (.alwaysOn, false): efforts
+        case (_, false): ["off"] + efforts
+        case (.alwaysOn, true): ["on"]
+        case (.toggle, true): ["on", "off"]
+        case (.unsupported, true): ["off"]
+        }
+    }
+
+    /// 默认 `thinking`，照网页端 `z1`：不支持思考为 `off`；有强度取默认强度（没有就取中间那档）；否则 `on`。
+    var defaultThinking: String {
+        if thinkingKind == .unsupported { return "off" }
+        guard !efforts.isEmpty else { return "on" }
+        if let defaultEffort, efforts.contains(defaultEffort) { return defaultEffort }
+        return efforts[efforts.count / 2]
+    }
+
+    /// 把任意取值落到这个模型支持的选项上（切模型时沿用原选择，不支持就回默认）。
+    func normalizedThinking(_ value: String?) -> String {
+        guard let value, thinkingOptions.contains(value) else { return defaultThinking }
+        return value
+    }
 
     enum CodingKeys: String, CodingKey {
         case provider, model, capabilities
@@ -639,16 +793,268 @@ struct ModelList: Decodable, Sendable {
 /// `GET /config` 里只取默认模型。整个 config 含 provider 配置，别整体解码/打日志。
 struct ServerConfigDefaults: Decodable, Sendable {
     let defaultModel: String?
+    /// 新会话默认权限；没设时网页端按「始终询问」（manual）显示。
+    let defaultPermissionMode: PermissionMode?
+    /// 新会话默认思考：`{enabled}` 或 `{enabled, effort}`。
+    let thinking: ThinkingConfig?
+
+    struct ThinkingConfig: Codable, Sendable, Equatable {
+        let enabled: Bool
+        var effort: String?
+
+        /// 网页端 `bpe`：off → 关、on → 开（不带强度）、其余是强度名。
+        init(option: String) {
+            enabled = option != "off"
+            effort = option == "off" || option == "on" ? nil : option
+        }
+    }
 
     enum CodingKeys: String, CodingKey {
         case defaultModel = "default_model"
+        case defaultPermissionMode = "default_permission_mode"
+        case thinking
     }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        defaultModel = try? c.decodeIfPresent(String.self, forKey: .defaultModel)
+        defaultPermissionMode = try? c.decodeIfPresent(PermissionMode.self, forKey: .defaultPermissionMode)
+        thinking = try? c.decodeIfPresent(ThinkingConfig.self, forKey: .thinking)
+    }
+
+    /// 网页端 `yT(...) ?? z1(model)`：配置里的思考在这个模型上可用就用它，否则用模型默认。
+    func thinkingOption(for model: ModelInfo) -> String {
+        if let thinking {
+            if !thinking.enabled, model.thinkingOptions.contains("off") { return "off" }
+            if let effort = thinking.effort, model.thinkingOptions.contains(effort) { return effort }
+        }
+        return model.defaultThinking
+    }
+}
+
+/// `POST /config` 只带要改的字段（网页端 `setConfig`）。
+struct ServerConfigPatch: Encodable, Sendable {
+    var defaultModel: String?
+    var defaultPermissionMode: PermissionMode?
+    var thinking: ServerConfigDefaults.ThinkingConfig?
+
+    enum CodingKeys: String, CodingKey {
+        case defaultModel = "default_model"
+        case defaultPermissionMode = "default_permission_mode"
+        case thinking
+    }
+}
+
+// MARK: - 模型供应商（照网页端「供应商管理」）
+
+/// `GET /providers` 的一项。`GET /providers/{id}` 额外带 `api_key`（编辑表单预填用）。
+struct ProviderItem: Decodable, Identifiable, Hashable, Sendable {
+    let id: String
+    let type: String
+    let baseURL: String?
+    let defaultModel: String?
+    let hasAPIKey: Bool
+    let status: Status
+    let models: [String]
+    let apiKey: String?
+
+    enum Status: String, Decodable, Sendable {
+        case connected, error, unconfigured
+    }
+
+    /// Kimi 订阅：OAuth 托管，不能在这里改（网页端 `oZ`）。
+    var isManaged: Bool { id == KimiConfig.kimiSubscriptionProvider && type == "kimi" }
+    var title: String { isManaged ? "Kimi 订阅" : id }
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, status, models
+        case baseURL = "base_url"
+        case defaultModel = "default_model"
+        case hasAPIKey = "has_api_key"
+        case apiKey = "api_key"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        type = try c.decode(String.self, forKey: .type)
+        baseURL = try? c.decodeIfPresent(String.self, forKey: .baseURL)
+        defaultModel = try? c.decodeIfPresent(String.self, forKey: .defaultModel)
+        hasAPIKey = (try? c.decode(Bool.self, forKey: .hasAPIKey)) ?? false
+        status = (try? c.decode(Status.self, forKey: .status)) ?? .unconfigured
+        models = (try? c.decodeIfPresent([String].self, forKey: .models)) ?? []
+        apiKey = try? c.decodeIfPresent(String.self, forKey: .apiKey)
+    }
+}
+
+struct ProviderList: Decodable, Sendable {
+    let items: [ProviderItem]
+}
+
+/// API 协议（`providerWireTypeSchema`），顺序同网页端下拉。
+enum ProviderWireType: String, CaseIterable, Identifiable, Sendable {
+    case kimi, openai
+    case openaiResponses = "openai_responses"
+    case anthropic
+    case googleGenAI = "google-genai"
+    case vertexAI = "vertexai"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .kimi: "Kimi"
+        case .openai: "OpenAI"
+        case .openaiResponses: "OpenAI Responses"
+        case .anthropic: "Anthropic"
+        case .googleGenAI: "Google GenAI"
+        case .vertexAI: "Vertex AI"
+        }
+    }
+
+    static func title(for raw: String?) -> String {
+        raw.flatMap(ProviderWireType.init(rawValue:))?.title ?? raw ?? "未知协议"
+    }
+}
+
+/// `GET /config` 里 `models` 段的一项（键名是驼峰）。编辑供应商时用它还原模型表（网页端 `Tx`）。
+struct ConfigModelEntry: Decodable, Sendable {
+    let provider: String
+    let model: String
+    let maxContextSize: Int?
+    let displayName: String?
+    let capabilities: [String]?
+    let supportEfforts: [String]?
+    let adaptiveThinking: Bool?
+}
+
+/// 只解码 `GET /config` 的 `models` 段；单项坏了跳过，不影响其他。
+struct ServerConfigModels: Decodable, Sendable {
+    let items: [ConfigModelEntry]
+
+    private struct Lenient: Decodable {
+        let value: ConfigModelEntry?
+        init(from decoder: any Decoder) throws { value = try? ConfigModelEntry(from: decoder) }
+    }
+
+    enum CodingKeys: String, CodingKey { case models }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let raw = (try? c.decodeIfPresent([String: Lenient].self, forKey: .models)) ?? [:]
+        items = raw.values.compactMap(\.value)
+    }
+}
+
+/// 新建 / 整体替换供应商时的一个模型（`createProviderModelSchema`）。
+struct ProviderModelInput: Encodable, Sendable {
+    let model: String
+    let maxContextSize: Int
+    let displayName: String?
+    let capabilities: [String]?
+    let supportEfforts: [String]?
+    let adaptiveThinking: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case model
+        case maxContextSize = "max_context_size"
+        case displayName = "display_name"
+        case capabilities
+        case supportEfforts = "support_efforts"
+        case adaptiveThinking = "adaptive_thinking"
+    }
+}
+
+/// `POST /providers`（带 `id`）与 `PUT /providers/{id}`（改名时带 `new_id`）的请求体。
+/// `api_key`：不带 = 保留原值，`""` = 清空，其他 = 替换。
+struct ProviderWriteBody: Encodable, Sendable {
+    var id: String?
+    var newID: String?
+    let type: String
+    var apiKey: String?
+    var baseURL: String?
+    var defaultModel: String?
+    let models: [ProviderModelInput]
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, models
+        case newID = "new_id"
+        case apiKey = "api_key"
+        case baseURL = "base_url"
+        case defaultModel = "default_model"
+    }
+}
+
+/// `GET /catalog/providers`：models.dev 目录里的供应商。
+struct CatalogProvider: Decodable, Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let wireType: String?
+    let baseURL: String?
+    let needsBaseURL: Bool
+    let rejected: Bool
+    let rejectReason: String?
+    let modelCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, rejected, models
+        case wireType = "wire_type"
+        case baseURL = "base_url"
+        case needsBaseURL = "needs_base_url"
+        case rejectReason = "reject_reason"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = (try? c.decode(String.self, forKey: .name)) ?? id
+        wireType = try? c.decodeIfPresent(String.self, forKey: .wireType)
+        baseURL = try? c.decodeIfPresent(String.self, forKey: .baseURL)
+        needsBaseURL = (try? c.decode(Bool.self, forKey: .needsBaseURL)) ?? false
+        rejected = (try? c.decode(Bool.self, forKey: .rejected)) ?? false
+        rejectReason = try? c.decodeIfPresent(String.self, forKey: .rejectReason)
+        modelCount = (try? c.decodeIfPresent([JSONValue].self, forKey: .models))?.count ?? 0
+    }
+
+    /// 不能导入的原因（网页端 `catalog.rejectReason`）。
+    var rejectText: String {
+        switch rejectReason {
+        case "unknown-explicit-type": "协议不受支持"
+        case "proprietary-sdk": "私有协议，无法导入"
+        case "empty-base-url": "Base URL 为空"
+        case "placeholder-base-url": "端点包含环境变量占位符"
+        default: "不可导入"
+        }
+    }
+}
+
+struct CatalogProviderList: Decodable, Sendable {
+    let items: [CatalogProvider]
+}
+
+/// `POST /providers/{id}:refresh` 的结果里只关心失败项。
+struct ProviderRefreshResult: Decodable, Sendable {
+    struct Failure: Decodable, Sendable {
+        let provider: String
+        let reason: String
+    }
+
+    let failed: [Failure]?
 }
 
 extension String {
     /// `low` → `Low`，composer 上的「K3·Low」。
     var effortLabel: String {
         prefix(1).uppercased() + dropFirst()
+    }
+
+    /// 模型面板「思考」菜单里的选项名：`on` / `off` 用中文，强度沿用 `Low` / `High` / `Max`。
+    var thinkingOptionLabel: String {
+        switch self {
+        case "on": "开启"
+        case "off": "关闭"
+        default: effortLabel
+        }
     }
 }
 
@@ -753,11 +1159,14 @@ enum Attachment: Identifiable, Sendable {
 
     case image(id: UUID = UUID(), jpeg: Data, thumbnail: Data)
     case file(id: UUID = UUID(), name: String, mediaType: String, data: Data)
+    /// 电脑上会话目录里的文件（文件预览「添加到会话」）：不上传，发送时以 `[名字](路径)` 提及写进正文。
+    case mention(id: UUID = UUID(), entry: FsEntry)
 
     var id: UUID {
         switch self {
         case let .image(id, _, _): id
         case let .file(id, _, _, _): id
+        case let .mention(id, _): id
         }
     }
 }

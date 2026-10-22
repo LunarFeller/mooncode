@@ -50,6 +50,70 @@ struct KapClient: Sendable {
         try await get("fs:home")
     }
 
+    /// 会话目录里某一层的文件和文件夹（网页端 `listDirectory`）：`POST /sessions/{id}/fs:list`。
+    func listFiles(_ sessionID: String, path: String) async throws -> FsList {
+        struct Body: Encodable { let path: String; let limit: Int }
+        return try await post("sessions/\(sessionID)/fs:list", body: Body(path: path, limit: 1000))
+    }
+
+    func readFile(_ sessionID: String, path: String) async throws -> FsContent {
+        try await readFile(sessionID, path: path, offset: 0, length: 1024 * 1024, encoding: "auto")
+    }
+
+    /// 把会话目录里的文件整个拉到沙盒临时目录。
+    ///
+    /// 不走 `GET fs/{path}:download`：kap-server 2.0.1 把文件名原样写进 `content-disposition`，
+    /// 名字带中文就 500（`ERR_INVALID_CHAR`）。改用 `fs:read` 按块读 base64：每块 3 MiB
+    /// （编码后约 4 MiB，整读 10 MiB 编码后会超隧道单请求上限），边读边写盘。
+    /// `fs:read` 本身拒绝超过 10 MiB 的文件（41302），所以这里也只能拿 10 MiB 以内的。
+    func downloadFile(_ sessionID: String, path: String) async throws -> URL {
+        let chunkLength = 3 * 1024 * 1024
+        let destination = try PreviewStorage.makeDestination(for: path)
+        do {
+            FileManager.default.createFile(atPath: destination.path(percentEncoded: false), contents: nil)
+            let handle = try FileHandle(forWritingTo: destination)
+            defer { try? handle.close() }
+            var offset = 0
+            while true {
+                try Task.checkCancellation()
+                let chunk = try await readFile(
+                    sessionID, path: path, offset: offset, length: chunkLength, encoding: "base64"
+                )
+                let data: Data
+                if chunk.encoding == "base64" {
+                    guard let decoded = Data(base64Encoded: chunk.content) else {
+                        throw KapError.http(status: 0, body: "文件内容解码失败")
+                    }
+                    data = decoded
+                } else {
+                    data = Data(chunk.content.utf8)
+                }
+                try handle.write(contentsOf: data)
+                offset += data.count
+                if data.isEmpty || offset >= chunk.size { break }
+            }
+            return destination
+        } catch {
+            PreviewStorage.remove(destination)
+            throw error
+        }
+    }
+
+    private func readFile(
+        _ sessionID: String, path: String, offset: Int, length: Int, encoding: String
+    ) async throws -> FsContent {
+        struct Body: Encodable {
+            let path: String
+            let offset: Int
+            let length: Int
+            let encoding: String
+        }
+        return try await post(
+            "sessions/\(sessionID)/fs:read",
+            body: Body(path: path, offset: offset, length: length, encoding: encoding)
+        )
+    }
+
     func models() async throws -> [ModelInfo] {
         let list: ModelList = try await get("models")
         return list.items
@@ -57,6 +121,89 @@ struct KapClient: Sendable {
 
     func configDefaults() async throws -> ServerConfigDefaults {
         try await get("config")
+    }
+
+    func updateConfig(_ patch: ServerConfigPatch) async throws -> ServerConfigDefaults {
+        try await post("config", body: patch)
+    }
+
+    // MARK: 模型供应商（与网页端 `listProviders` / `addProvider` / `updateProvider` … 同形）
+
+    func providers() async throws -> [ProviderItem] {
+        let list: ProviderList = try await get("providers")
+        return list.items
+    }
+
+    /// 单个供应商，带已存的 `api_key`（编辑表单预填）。
+    func provider(_ id: String) async throws -> ProviderItem {
+        try await get("providers/\(id)")
+    }
+
+    /// `/config` 里的模型别名（只解码 `models` 段，别的配置不碰）。
+    func configModels() async throws -> [ConfigModelEntry] {
+        let config: ServerConfigModels = try await get("config")
+        return config.items
+    }
+
+    func createProvider(_ body: ProviderWriteBody) async throws {
+        let _: JSONValue = try await post("providers", body: body)
+    }
+
+    func replaceProvider(_ id: String, body: ProviderWriteBody) async throws {
+        let _: JSONValue = try await send(method: "PUT", path: "providers/\(id)", query: [:], body: body)
+    }
+
+    /// 成功是 204 无正文；业务错误照常是 200 + 错误信封。
+    func deleteProvider(_ id: String) async throws {
+        var request = URLRequest(url: endpoint.apiBaseURL.appending(path: "providers/\(id)"))
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token = await tokenProvider() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(status) else {
+            throw KapError.http(status: status, body: String(data: data, encoding: .utf8) ?? "")
+        }
+        if !data.isEmpty, let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data),
+           envelope.code != KapErrorCode.ok {
+            throw KapError.api(code: envelope.code, message: envelope.msg)
+        }
+    }
+
+    /// 重新拉这个供应商的模型元数据；失败项当错误抛出来。
+    func refreshProvider(_ id: String) async throws {
+        struct Empty: Encodable {}
+        let result: ProviderRefreshResult = try await post("providers/\(id):refresh", body: Empty())
+        if let failure = result.failed?.first {
+            throw KapError.api(code: -1, message: failure.reason)
+        }
+    }
+
+    func catalogProviders() async throws -> [CatalogProvider] {
+        let list: CatalogProviderList = try await get("catalog/providers")
+        return list.items
+    }
+
+    func importCatalogProvider(catalogID: String, id: String?, apiKey: String, baseURL: String?) async throws {
+        struct Body: Encodable {
+            let catalogID: String
+            let id: String?
+            let apiKey: String
+            let baseURL: String?
+
+            enum CodingKeys: String, CodingKey {
+                case id
+                case catalogID = "catalog_id"
+                case apiKey = "api_key"
+                case baseURL = "base_url"
+            }
+        }
+        let _: JSONValue = try await post(
+            "providers:import_catalog",
+            body: Body(catalogID: catalogID, id: id, apiKey: apiKey, baseURL: baseURL)
+        )
     }
 
     /// 订阅用量。是那台电脑上登录的账号的用量（与本 App 同账号）。

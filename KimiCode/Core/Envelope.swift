@@ -37,7 +37,15 @@ enum KapErrorCode {
     static let ok = 0
     static let validationFailed = 40001
     static let unauthorized = 40101
+    /// 电脑上这个模型的 provider 没配凭证（第三方没填 API Key，或 Kimi 没登录）。
+    static let modelCredentialMissing = 40111
+    /// 电脑上这个模型的凭证被上游拒了（Key 无效 / 过期）。
+    static let modelCredentialRejected = 40112
+    /// 模型解析不到已配置的 provider（电脑上删了这个模型）。
+    static let modelNotResolved = 40113
     static let notFound = 40401
+    static let fileNotFound = 40409
+    static let fileTooLarge = 41302
     static let approvalNotFound = 40404
     static let approvalAlreadyResolved = 40902
     static let remoteControlAlreadyRunning = 40903
@@ -61,7 +69,17 @@ enum KapError: LocalizedError {
             if status == 502 { return "请求转发失败（502）。请重试；若持续出现，请检查电脑上的 `kimi rc` 连接。" }
             return "HTTP \(status)\(body.isEmpty ? "" : "：\(body.prefix(200))")"
         case let .api(code, message):
-            return "\(message)（code \(code)）"
+            // 这三个都是电脑那边的模型配置问题，不是手机登录过期：别引导重新登录。
+            switch code {
+            case KapErrorCode.modelCredentialMissing:
+                return "电脑上这个模型还没配置凭证（API Key 或登录）。请在电脑上配好，或换一个模型。\n\(message)"
+            case KapErrorCode.modelCredentialRejected:
+                return "电脑上这个模型的凭证无效或已过期。请在电脑上更新，或换一个模型。\n\(message)"
+            case KapErrorCode.modelNotResolved:
+                return "电脑上找不到这个模型的配置，可能已被删除。请换一个模型。\n\(message)"
+            default:
+                return "\(message)（code \(code)）"
+            }
         case let .decoding(underlying, context):
             return "解析 \(context) 失败：\(underlying)"
         case .notConnected:

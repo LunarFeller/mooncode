@@ -101,18 +101,25 @@ struct ComposerView: View {
         }) { panel in
             switch panel {
             case .model:
-                ModelSelectionPanel(models: app.models, config: chat.config, confirm: { model, effort in
-                    Task { await chat.setModel(model, effort: effort) }
-                    activePanel = nil
-                }, onHeight: { modelPanelHeight = $0 })
+                ModelPanel(
+                    models: app.models,
+                    config: chat.config,
+                    client: app.client,
+                    applyModel: { model, effort in Task { await chat.setModel(model, effort: effort) } },
+                    applyEffort: { model, effort in Task { await chat.setModel(model, effort: effort) } },
+                    onProvidersChanged: { await app.reloadModels() },
+                    onHeight: { modelPanelHeight = $0 }
+                )
                 .presentationDetents([.height(modelPanelHeight)])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(32)
+                .presentationBackground(Color(.systemGroupedBackground))
             case .attachment:
                 attachmentPanel
                     .presentationDetents([.height(230)])
                     .presentationDragIndicator(.visible)
                     .presentationCornerRadius(32)
+                    .presentationBackground(Color(.systemGroupedBackground))
             }
         }
         .photosPicker(
@@ -193,6 +200,7 @@ struct ComposerView: View {
         .accessibilityLabel("权限：\(chat.config.permission.title)")
     }
 
+    /// 「模型名 High」一个按钮：点开模型面板（当前模型 + 思考强度）。
     private var modelMenu: some View {
         Button {
             isFocused = false
@@ -200,7 +208,7 @@ struct ComposerView: View {
         } label: {
             // 模型名正常色，思考强度与占位文字同色。
             (Text(modelName).foregroundStyle(.primary)
-                + Text(effortSuffix).foregroundStyle(Color(.secondaryLabel)))
+                + Text(effortLabel.isEmpty ? "" : " \(effortLabel)").foregroundStyle(Color(.secondaryLabel)))
                 .font(.subheadline.weight(.medium))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
@@ -222,7 +230,7 @@ struct ComposerView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 12)
-        .background(Color(.systemBackground))
+        .background(Color(.systemGroupedBackground))
     }
 
     private func attachmentCard(_ title: String, symbol: String, source: AttachmentSource) -> some View {
@@ -239,7 +247,7 @@ struct ComposerView: View {
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity)
             .frame(height: 112)
-            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 22))
+            .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
             .contentShape(.rect(cornerRadius: 22))
         }
         .buttonStyle(.plain)
@@ -251,10 +259,11 @@ struct ComposerView: View {
             ?? "模型"
     }
 
-    /// 「 Max」：模型不支持强度时为空。
-    private var effortSuffix: String {
-        guard let effort = chat.config.effort, currentModel?.efforts.isEmpty == false else { return "" }
-        return " \(effort.effortLabel)"
+    /// 「Max」/「Off」：只有能选的模型才显示；开着思考但没强度可选（`on`）时为空。
+    private var effortLabel: String {
+        guard let effort = chat.config.effort, effort != "on",
+              let model = currentModel, model.thinkingOptions.count > 1 else { return "" }
+        return effort.effortLabel
     }
 
     @ViewBuilder
@@ -333,6 +342,8 @@ struct ComposerView: View {
 private struct AttachmentStrip: View {
     let chat: ChatModel
 
+    @Environment(\.openFilePreview) private var openFilePreview
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -384,6 +395,20 @@ private struct AttachmentStrip: View {
             .padding(.horizontal, 10)
             .frame(width: 150, height: 56, alignment: .leading)
             .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 12))
+        case let .mention(_, entry):
+            HStack(spacing: 8) {
+                Image(systemName: entry.symbolName)
+                    .foregroundStyle(.secondary)
+                Text(entry.name)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.horizontal, 10)
+            .frame(width: 150, height: 56, alignment: .leading)
+            .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 12))
+            .contentShape(.rect(cornerRadius: 12))
+            .onTapGesture { openFilePreview?(entry) }
         }
     }
 }

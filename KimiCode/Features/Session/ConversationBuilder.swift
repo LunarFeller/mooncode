@@ -37,6 +37,14 @@ struct AttachmentRef: Identifiable, Sendable, Hashable {
     let name: String
     let isImage: Bool
     let source: AttachmentSource?
+    /// 正文里拆出来的文件提及才有：会话目录里的相对路径（文件夹以 `/` 结尾），点它打开预览。
+    var mentionPath: String? = nil
+
+    /// 能打开预览的文件提及（文件夹不行）。
+    var previewEntry: FsEntry? {
+        guard let mentionPath, !mentionPath.hasSuffix("/") else { return nil }
+        return FsEntry(path: mentionPath, name: name)
+    }
 }
 
 struct CompactionEntry: Sendable {
@@ -325,10 +333,11 @@ enum ConversationBuilder {
                     ensureAssistant("\(turn.turnId):notice", turn: turn, createdAt: turnStart)
                     current?.blocks.append(ConversationBuilder.notification(id: "\(turn.turnId):input", text: prompt, task: nil))
                 } else if ConversationBuilder.isUserVisible(turn.originKind) {
+                    let split = ConversationBuilder.splitMentions(ConversationBuilder.stripInjected(prompt))
                     entries.append(ChatEntry(id: "\(turn.turnId):input", kind: .user(UserEntry(
                         id: "\(turn.turnId):input",
-                        text: ConversationBuilder.stripInjected(prompt),
-                        attachments: attachments,
+                        text: split.text,
+                        attachments: split.mentions + attachments,
                         createdAt: turnStart
                     ))))
                 }
@@ -414,10 +423,11 @@ enum ConversationBuilder {
                     .map(ConversationBuilder.attachmentRef)
                 guard !text.isEmpty || !frameAttachments.isEmpty else { return }
                 flush()
+                let split = ConversationBuilder.splitMentions(ConversationBuilder.stripInjected(text))
                 entries.append(ChatEntry(id: frame.frameId, kind: .user(UserEntry(
                     id: frame.frameId,
-                    text: ConversationBuilder.stripInjected(text),
-                    attachments: frameAttachments,
+                    text: split.text,
+                    attachments: split.mentions + frameAttachments,
                     createdAt: stepStart
                 ))))
                 return
@@ -484,6 +494,36 @@ enum ConversationBuilder {
             isImage: type.hasPrefix("image/") || type == "image/*",
             source: AttachmentSource(attachment.source)
         )
+    }
+
+    /// 把正文里的文件提及 `[名字](相对路径)` 拆出来当附件显示（网页端渲染成药丸）。
+    /// 路径带协议头、`#` / `?` / `//` 开头的是普通链接，不动（官方 `WT`）。名字按 `yC` 反转义。
+    static func splitMentions(_ text: String) -> (text: String, mentions: [AttachmentRef]) {
+        var mentions: [AttachmentRef] = []
+        let pattern = /\[((?:\\.|[^\]\\\n])+)\]\(([^)\s]+)\)/
+        let stripped = text.replacing(pattern) { match -> String in
+            let target = String(match.output.2)
+            let isLink = target.hasPrefix("#") || target.hasPrefix("?") || target.hasPrefix("//")
+                || (target.firstMatch(of: /^[a-zA-Z][a-zA-Z0-9+.\-]*:/) != nil
+                    && target.firstMatch(of: /^[a-zA-Z]:(?:[\\\/]|%5[cC])/) == nil)
+            guard !isLink else { return String(match.output.0) }
+            let name = String(match.output.1)
+                .replacing(/\\([\\\[\]])/) { String($0.output.1) }
+                .replacingOccurrences(of: "%0A", with: "\n")
+                .replacingOccurrences(of: "%0D", with: "\r")
+                .replacingOccurrences(of: "%26", with: "&")
+                .replacingOccurrences(of: "%3C", with: "<")
+                .replacingOccurrences(of: "%3E", with: ">")
+                .replacingOccurrences(of: "%25", with: "%")
+            mentions.append(AttachmentRef(
+                id: "mention:\(mentions.count):\(target)", name: name, isImage: false,
+                source: nil, mentionPath: target.removingPercentEncoding ?? target
+            ))
+            return ""
+        }
+        guard !mentions.isEmpty else { return (text, []) }
+        let collapsed = stripped.replacing(/[ \t]{2,}/, with: " ")
+        return (collapsed.trimmingCharacters(in: .whitespacesAndNewlines), mentions)
     }
 
     /// 去掉系统注入的 `<system-reminder>` 之类标签块；被 `<prompt>` 包着的只取里面（官方 `LE`）。

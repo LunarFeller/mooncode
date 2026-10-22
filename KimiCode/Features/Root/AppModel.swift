@@ -148,10 +148,23 @@ final class AppModel {
             handle(error)
         }
         // 下面几项失败不影响主流程。
-        // 只保留「Kimi 订阅」组的模型，顺序沿用服务端返回的。
-        self.models = ((try? await models) ?? []).filter(\.isKimiSubscription)
+        // 电脑上配好的模型全都列出（含第三方 provider）；「Kimi 订阅」组排最前，组内顺序沿用服务端返回的。
+        let all = (try? await models) ?? []
+        self.models = all.filter(\.isKimiSubscription) + all.filter { !$0.isKimiSubscription }
         self.defaultModelID = (try? await config)?.defaultModel
         if let value = try? await user { self.user = value }
+        reconcileDraft()
+    }
+
+    /// 供应商改完后重拉模型列表和默认模型（composer / 模型面板跟着变）。
+    func reloadModels() async {
+        guard let client else { return }
+        async let models = client.models()
+        async let config = client.configDefaults()
+        if let all = try? await models {
+            self.models = all.filter(\.isKimiSubscription) + all.filter { !$0.isKimiSubscription }
+        }
+        if let config = try? await config { self.defaultModelID = config.defaultModel }
         reconcileDraft()
     }
 
@@ -276,19 +289,21 @@ final class AppModel {
         )
     }
 
-    /// 新对话继承上次的选择；第一次用时：权限「完全自动」（服务端默认）、服务端默认模型及其默认思考强度。
-    /// 模型必须在「Kimi 订阅」组里：记住的或服务端默认的不是这组的，就退到这组第一个。
+    /// 新对话继承上次的选择；第一次用时：权限「完全自动」（服务端默认）、服务端默认模型及其默认思考。
+    /// 记住的或服务端默认的模型已经不在这台电脑上了，就退到列表第一个（Kimi 订阅组优先）。
     private var initialComposerConfig: ComposerConfig {
         if let data = UserDefaults.standard.data(forKey: Self.composerConfigKey),
            let stored = try? JSONDecoder().decode(ComposerConfig.self, from: data),
-           model(withID: stored.modelID) != nil {
-            return stored
+           let storedModel = model(withID: stored.modelID) {
+            var config = stored
+            config.effort = storedModel.normalizedThinking(stored.effort)
+            return config
         }
-        let modelID = model(withID: defaultModelID)?.model ?? models.first?.model
+        let fallback = model(withID: defaultModelID) ?? models.first
         return ComposerConfig(
             permission: .auto,
-            modelID: modelID,
-            effort: model(withID: modelID)?.defaultEffort
+            modelID: fallback?.model,
+            effort: fallback?.defaultThinking
         )
     }
 

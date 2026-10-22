@@ -58,7 +58,7 @@ struct AddWorkspaceSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
+                    SheetCloseButton()
                 }
             }
         }
@@ -74,13 +74,12 @@ struct AddWorkspaceSheet: View {
             Button {
                 if let parent { Task { await browse(parent) } }
             } label: {
-                Label("返回上级目录", systemImage: "arrow.up")
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 12)
-                    .frame(height: 34)
-                    .background(Color(.tertiarySystemFill), in: .capsule)
-                    .fixedSize()
+                Image(systemName: "chevron.left")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 34, height: 34)
+                    .background(Color(.tertiarySystemFill), in: .circle)
             }
+            .accessibilityLabel("返回上级目录")
             .buttonStyle(.plain)
             .disabled(parent == nil)
             .opacity(parent == nil ? 0.4 : 1)
@@ -89,15 +88,32 @@ struct AddWorkspaceSheet: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
                     ForEach(Array(crumbs.enumerated()), id: \.element.path) { index, crumb in
-                        if index > 1 {
-                            Text("/").foregroundStyle(.tertiary)
+                        let isCurrent = index == crumbs.count - 1
+                        if index > 0 {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.tertiary)
                         }
-                        Button(crumb.label) {
+                        // 上级目录可点；当前目录只加粗，不可点。
+                        Button {
                             Task { await browse(crumb.path) }
+                        } label: {
+                            Group {
+                                if crumb.path == "/" {
+                                    Image(systemName: "externaldrive")
+                                        .accessibilityLabel("根目录")
+                                } else {
+                                    Text(crumb.label)
+                                }
+                            }
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 4)
+                            .contentShape(.rect)
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(index == crumbs.count - 1 ? .primary : .secondary)
-                        .fontWeight(index == crumbs.count - 1 ? .semibold : .regular)
+                        .foregroundStyle(.primary)
+                        .fontWeight(isCurrent ? .semibold : .regular)
+                        .allowsHitTesting(!isCurrent)
                     }
                 }
                 .font(.subheadline)
@@ -130,7 +146,8 @@ struct AddWorkspaceSheet: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
-            TextField("在此目录下模糊搜索…", text: $query)
+            TextField("", text: $query)
+                .accessibilityLabel("在此目录下搜索")
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             if isSearching {
@@ -218,7 +235,7 @@ struct AddWorkspaceSheet: View {
             .listRowSeparator(.hidden)
     }
 
-    // MARK: 底部：提示 + 添加按钮
+    // MARK: 底部：错误 + 添加按钮
 
     private var footer: some View {
         VStack(spacing: 10) {
@@ -226,11 +243,6 @@ struct AddWorkspaceSheet: View {
                 Text(addError)
                     .font(.footnote)
                     .foregroundStyle(Palette.danger)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Label("点击文件夹进入，再点下方按钮将其添加", systemImage: "info.circle")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             ActionButton(isAdding ? "添加中…" : "添加「\(folderName)」文件夹", primary: true) {

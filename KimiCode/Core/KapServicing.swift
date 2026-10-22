@@ -7,9 +7,25 @@ protocol KapServicing: Sendable {
     func addWorkspace(root: String) async throws -> Workspace
     func browseFs(_ path: String) async throws -> FsBrowse
     func fsHome() async throws -> FsHome
+    func listFiles(_ sessionID: String, path: String) async throws -> FsList
+    func readFile(_ sessionID: String, path: String) async throws -> FsContent
+    func downloadFile(_ sessionID: String, path: String) async throws -> URL
     func sessions(pageSize: Int) async throws -> SessionList
     func models() async throws -> [ModelInfo]
     func configDefaults() async throws -> ServerConfigDefaults
+    /// 改电脑上的新会话默认值（默认模型 / 权限 / 思考）。
+    func updateConfig(_ patch: ServerConfigPatch) async throws -> ServerConfigDefaults
+
+    // 模型供应商（模型面板 ⚙︎）
+    func providers() async throws -> [ProviderItem]
+    func provider(_ id: String) async throws -> ProviderItem
+    func configModels() async throws -> [ConfigModelEntry]
+    func createProvider(_ body: ProviderWriteBody) async throws
+    func replaceProvider(_ id: String, body: ProviderWriteBody) async throws
+    func deleteProvider(_ id: String) async throws
+    func refreshProvider(_ id: String) async throws
+    func catalogProviders() async throws -> [CatalogProvider]
+    func importCatalogProvider(catalogID: String, id: String?, apiKey: String, baseURL: String?) async throws
     func usage() async throws -> PlanUsage
     func userInfo() async throws -> KimiUser?
 

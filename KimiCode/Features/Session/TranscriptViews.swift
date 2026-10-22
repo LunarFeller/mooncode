@@ -83,7 +83,7 @@ struct ConversationList: View {
         }
 
         ForEach(chat.optimisticPrompts) { prompt in
-            OptimisticPromptRow(prompt: prompt) {
+            OptimisticPromptRow(prompt: prompt, loadAttachment: { try await chat.attachmentData($0) }) {
                 Task { await chat.retry(prompt) }
             } discard: {
                 chat.discard(prompt)
@@ -198,6 +198,15 @@ private struct LoadOlderRow: View {
 
 // MARK: - 用户消息
 
+/// 用户气泡的样子：浅灰底、中等字重，一行时是胶囊，多行时是大圆角。乐观显示的那条也用它，换成正文里的真消息时不跳。
+private extension View {
+    func userBubble() -> some View {
+        padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Palette.userBubble, in: .rect(cornerRadius: UserTurnView.bubbleRadius, style: .continuous))
+    }
+}
+
 struct UserTurnView: View {
     let entry: UserEntry
     let canUndo: Bool
@@ -207,9 +216,14 @@ struct UserTurnView: View {
     @State private var expanded = false
     @State private var copied = false
     @State private var isClamped = false
+    /// 复制 / 撤回 / 时间那一行默认收着，点气泡才出来。
+    @State private var showsActions = false
 
     /// 官方 `Bq = 10`：超过 10 行折起来，给「展开 / 收起」。
     private static let clampLines = 10
+    /// 单行时正好是高度的一半，看起来是胶囊。
+    static let bubbleRadius: CGFloat = 23
+    static let tone = TextTone(weight: .medium)
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
@@ -218,13 +232,18 @@ struct UserTurnView: View {
                     FlowAttachments(attachments: entry.attachments, load: loadAttachment)
                 }
                 if !entry.text.isEmpty {
-                    Text(entry.text)
-                        .lineSpacing(3)
-                        .lineLimit(expanded ? nil : Self.clampLines)
-                        .textSelection(.enabled)
+                    // 长按可以自由选择（UIKit 排版，见 `SelectableText`）。
+                    SelectableText(
+                        content: .plain(entry.text, tone: Self.tone, lineSpacing: 3),
+                        hugsWidth: true,
+                        lineLimit: expanded ? 0 : Self.clampLines
+                    )
+                        // 文字是 UITextView，会把单击吃掉，气泡上的点击收不到，这里同时听一下。
+                        .simultaneousGesture(TapGesture().onEnded { toggleActions() })
                         .background {
                             // 量一下完整高度，判断是否被截断。
-                            Text(entry.text).lineSpacing(3).fixedSize(horizontal: false, vertical: true).hidden()
+                            Text(entry.text).fontWeight(.medium).lineSpacing(3)
+                                .fixedSize(horizontal: false, vertical: true).hidden()
                                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full in
                                     isClamped = full > UIFont.preferredFont(forTextStyle: .body).lineHeight * CGFloat(Self.clampLines) + 30
                                 }
@@ -245,44 +264,57 @@ struct UserTurnView: View {
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Palette.userBubble, in: .rect(cornerRadius: 12))
+            .userBubble()
+            .contentShape(.rect(cornerRadius: Self.bubbleRadius, style: .continuous))
+            .onTapGesture { toggleActions() }
             .containerRelativeFrame(.horizontal, alignment: .trailing) { width, _ in
                 let maxWidth = width * 0.88
                 if entry.text.isEmpty, !entry.attachments.isEmpty, entry.attachments.allSatisfy(\.isImage) {
-                    return AttachmentThumbnailLayout.contentWidth(for: entry.attachments.count, in: maxWidth - 24) + 24
+                    return AttachmentThumbnailLayout.contentWidth(for: entry.attachments.count, in: maxWidth - 32) + 32
                 }
                 return maxWidth
             }
 
-            HStack(spacing: 6) {
-                if !entry.text.isEmpty {
-                    CopyButton(text: entry.text, copied: $copied)
-                }
-                if canUndo {
-                    Button(action: undo) {
-                        Image(systemName: "arrow.uturn.backward")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 28, height: 28)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("撤回消息")
-                }
-                if let createdAt = entry.createdAt {
-                    MessageTime(date: createdAt)
-                }
+            if showsActions {
+                actions
+                    .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func toggleActions() {
+        withAnimation(.disclosure) { showsActions.toggle() }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 6) {
+            if !entry.text.isEmpty {
+                CopyButton(text: entry.text, copied: $copied)
+            }
+            if canUndo {
+                Button(action: undo) {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("撤回消息")
+            }
+            if let createdAt = entry.createdAt {
+                MessageTime(date: createdAt)
+            }
+        }
     }
 }
 
 private struct FlowAttachments: View {
     let attachments: [AttachmentRef]
     let load: @MainActor (AttachmentRef) async throws -> Data
+
+    @Environment(\.openFilePreview) private var openFilePreview
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -295,16 +327,30 @@ private struct FlowAttachments: View {
                 }
             }
             ForEach(attachments.filter { !$0.isImage }) { attachment in
-                Label(attachment.name, systemImage: "doc")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Palette.fill, in: .capsule)
+                // 文件提及点一下打开预览。
+                if let entry = attachment.previewEntry, let openFilePreview {
+                    Button {
+                        openFilePreview(entry)
+                    } label: {
+                        chip(attachment)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    chip(attachment)
+                }
             }
         }
+    }
+
+    private func chip(_ attachment: AttachmentRef) -> some View {
+        Label(attachment.name, systemImage: attachment.isImage ? "photo" : "doc")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Palette.fill, in: .capsule)
     }
 }
 
@@ -333,20 +379,23 @@ struct MessageTime: View {
 
 private struct OptimisticPromptRow: View {
     let prompt: ChatModel.OptimisticPrompt
+    let loadAttachment: @MainActor (AttachmentRef) async throws -> Data
     let retry: () -> Void
     let discard: () -> Void
 
     var body: some View {
+        let split = ConversationBuilder.splitMentions(prompt.text)
         VStack(alignment: .trailing, spacing: 6) {
             VStack(alignment: .leading, spacing: 4) {
+                if !split.mentions.isEmpty {
+                    FlowAttachments(attachments: split.mentions, load: loadAttachment)
+                }
                 LocalAttachmentPreviews(attachments: prompt.attachments)
-                if !prompt.text.isEmpty {
-                    Text(prompt.text).lineSpacing(3)
+                if !split.text.isEmpty {
+                    Text(split.text).fontWeight(.medium).lineSpacing(3)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Palette.userBubble, in: .rect(cornerRadius: 12))
+            .userBubble()
             .opacity(prompt.failed ? 0.6 : 1)
             .containerRelativeFrame(.horizontal, alignment: .trailing) { width, _ in
                 let maxWidth = width * 0.88
@@ -355,7 +404,7 @@ private struct OptimisticPromptRow: View {
                     return false
                 }
                 if prompt.text.isEmpty, imageOnly {
-                    return AttachmentThumbnailLayout.contentWidth(for: prompt.attachments.count, in: maxWidth - 24) + 24
+                    return AttachmentThumbnailLayout.contentWidth(for: prompt.attachments.count, in: maxWidth - 32) + 32
                 }
                 return maxWidth
             }
@@ -464,7 +513,7 @@ struct BlockView: View {
         case let .text(_, text):
             MarkdownText(text: text)
         case let .thinking(item):
-            ThinkingBlockView(item: item, ui: ui, streaming: streaming && item.durationMs == nil)
+            ThinkingBlockView(item: item, streaming: streaming && item.durationMs == nil)
         case let .tool(tool):
             ToolLineView(tool: tool, ui: ui)
         case let .notification(_, title, body, failed):
@@ -659,60 +708,40 @@ extension Animation {
     static let disclosure = Animation.easeInOut(duration: 0.25)
 }
 
-extension EnvironmentValues {
-    /// 把正文里带 `.id` 的某个视图滚到可视区的 `anchor` 处（ChatScreen 注入）。
-    @Entry var revealInTranscript: @MainActor (String, UnitPoint) -> Void = { _, _ in }
-}
-
+/// 思考块。
+///   - 进行中：一行「〰 思考中 最新的那句话」，涂鸦线一笔笔画出来再擦掉，循环；不能点开；那句话放不下时跟着往外吐的字往左滚。
+///   - 结束后：「〰 已思考 N秒 第一句话… ›」，涂鸦线静止，点一下从底部弹出全文，标题「思考了 N秒」。
 struct ThinkingBlockView: View {
     let item: ThinkingItem
-    let ui: TranscriptUIState
     let streaming: Bool
 
-    @Environment(\.revealInTranscript) private var reveal
-    /// 展开 / 收起动画期间给正文限高（从下往上裁），做出卷帘效果；nil = 不限。
-    @State private var cap: CGFloat?
-    /// 箭头单独跟着点击带动画转（正文的增删走卷帘、不带动画）；nil = 跟随实际开合。
-    @State private var arrowOpen: Bool?
-    /// 标题位置、正文高度、可视区高度。放在引用类型里：滚动时每帧都在变，不该触发重绘。
-    @State private var metrics = Metrics()
-
-    private var key: String { "think:\(item.id)" }
-    private var headerID: String { "think-header:\(item.id)" }
-    /// 标题滚回来后停的位置：留出左上 / 右上浮动按钮的高度。
-    private static let revealAnchor = UnitPoint(x: 0, y: 0.14)
-    /// 卷帘：缓动、不回弹，慢到看得清。
-    private static let roll = Animation.easeInOut(duration: 0.32)
-    /// 读到中段收起时，先滚回标题的时长（秒）。
-    private static let rewindSeconds = 0.38
-
-    private final class Metrics {
-        var headerMinY: CGFloat = 0
-        var bodyHeight: CGFloat = 0
-        var viewport: CGFloat = 900
-    }
+    @State private var isShowingDetail = false
 
     var body: some View {
-        let open = ui.isOpen(key, default: false)
-        VStack(alignment: .leading, spacing: 0) {
+        if streaming {
+            HStack(spacing: 8) {
+                ThinkingIcon(animating: true)
+                Text("思考中")
+                    .modifier(Breathing(active: true))
+                    .layoutPriority(1)
+                ThinkingTicker(text: Self.latestLine(item.text))
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(minHeight: 22)
+        } else {
             Button {
-                open ? collapse() : expand()
+                isShowingDetail = true
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "lightbulb")
-                        .font(.footnote)
-                        .frame(width: 20)
-                    Text(streaming ? "思考中…" : "思考过程")
-                        .modifier(Breathing(active: streaming))
-                    if streaming, let start = item.startedAt {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(Durations.format(context.date.timeIntervalSince(start) * 1000) ?? "")
-                                .foregroundStyle(.tertiary)
-                        }
-                    } else if let duration = item.durationMs, let text = Durations.format(duration), !text.isEmpty {
-                        Text("· \(text)").foregroundStyle(.tertiary)
-                    }
-                    Chevron(open: arrowOpen ?? open)
+                    ThinkingIcon(animating: false)
+                    Text(item.durationMs.flatMap(Self.duration).map { "已思考 \($0)" } ?? "已思考")
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Text(Self.headline(item.text))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Chevron(open: false)
                 }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -720,98 +749,203 @@ struct ThinkingBlockView: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .id(headerID)
-            .onGeometryChange(for: CGRect.self) { proxy in
-                CGRect(
-                    x: 0, y: proxy.frame(in: .global).minY,
-                    width: 0, height: proxy.bounds(of: .scrollView)?.height ?? 0
-                )
-            } action: { value in
-                metrics.headerMinY = value.minY
-                if value.height > 0 { metrics.viewport = value.height }
+            .sheet(isPresented: $isShowingDetail) {
+                ThinkingDetailSheet(item: item)
             }
+        }
+    }
 
-            if open {
-                IndentedBody {
-                    // 长思考动辄上万字：按段拆开、懒加载，只排屏幕上看得到的那几段。
-                    // 整段放进一个 Text 的话，每次展开都要把上万字排好几遍，主线程卡半秒多。
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(Array(Self.paragraphs(item.text).enumerated()), id: \.offset) { _, paragraph in
-                            Text(paragraph)
-                                .lineSpacing(3)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+    /// 「24秒」「1分20秒」「2小时5分」；不到一秒为「不到 1 秒」。
+    static func duration(_ ms: Double) -> String? {
+        let seconds = Int(ms / 1000)
+        guard seconds > 0 else { return "不到 1 秒" }
+        if seconds < 60 { return "\(seconds)秒" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)分" + (seconds % 60 == 0 ? "" : "\(seconds % 60)秒") }
+        return "\(minutes / 60)小时" + (minutes % 60 == 0 ? "" : "\(minutes % 60)分")
+    }
+
+    /// 正在写的那一行（最后一个非空行），去掉 Markdown 记号。
+    static func latestLine(_ text: String) -> String {
+        let line = text.split(separator: "\n", omittingEmptySubsequences: true)
+            .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
+        return plain(String(line))
+    }
+
+    /// 结束后那一行显示的摘要：第一个非空行。
+    static func headline(_ text: String) -> String {
+        let line = text.split(separator: "\n", omittingEmptySubsequences: true)
+            .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? ""
+        return plain(String(line))
+    }
+
+    private static func plain(_ line: String) -> String {
+        var result = line.trimmingCharacters(in: .whitespaces)
+        while result.hasPrefix("#") { result.removeFirst() }
+        if result.hasPrefix("- ") || result.hasPrefix("* ") { result.removeFirst(2) }
+        return result
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .trimmingCharacters(in: .whitespaces)
+    }
+}
+
+/// 涂鸦线图标。在思考时用 iOS 26 的 Draw 效果一笔画出来、再擦掉，循环；思考完停在画好的样子。
+private struct ThinkingIcon: View {
+    let animating: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var erased = false
+
+    var body: some View {
+        Image(systemName: "scribble.variable")
+            .symbolEffect(.drawOff, isActive: animating && !reduceMotion && erased)
+            .font(.footnote)
+            .frame(width: 20)
+            .task(id: animating && !reduceMotion) {
+                erased = false
+                guard animating, !reduceMotion else { return }
+                while true {
+                    do { try await Task.sleep(for: .seconds(1.6)) } catch { return }
+                    erased.toggle()
+                }
+            }
+    }
+}
+
+/// 思考中那一句：放得下就静止；放不下时先停一下让人看到开头，再平滑地往左追到最新的字，
+/// 字还在往外吐就一直跟着。离得越远追得越快，快追上时慢下来，不会一顿一顿地跳。
+private struct ThinkingTicker: View {
+    let text: String
+
+    @State private var textWidth: CGFloat = 0
+    @State private var boxWidth: CGFloat = 0
+    @State private var motion = Motion()
+
+    /// 每帧推进的位置放在引用类型里：滚动是每帧在变的，不该触发重绘。
+    private final class Motion {
+        var offset: CGFloat = 0
+        var lastTick: Date?
+        var holdUntil = Date.distantPast
+
+        func reset(hold: Double) {
+            offset = 0
+            lastTick = nil
+            holdUntil = .now.addingTimeInterval(hold)
+        }
+
+        func advance(to now: Date, target: CGFloat) -> CGFloat {
+            defer { lastTick = now }
+            guard target > offset else {
+                offset = max(0, target)
+                return offset
+            }
+            guard now >= holdUntil, let last = lastTick else { return offset }
+            let dt = CGFloat(min(now.timeIntervalSince(last), 0.1))
+            let speed = max(40, (target - offset) * 3)
+            offset = min(target, offset + speed * dt)
+            return offset
+        }
+    }
+
+    var body: some View {
+        let overflow = max(0, textWidth - boxWidth)
+        // 占位的一行空白定下高度、宽度占满剩下的地方；真正的字叠在上面，再长也不会把整行撑开。
+        Text(" ")
+            .hidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .leading) {
+                TimelineView(.animation(paused: overflow <= 0)) { context in
+                    let offset = motion.advance(to: context.date, target: overflow)
+                    Text(text)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
+                        .offset(x: -offset)
+                        .frame(width: boxWidth, alignment: .leading)
+                        .mask {
+                            // 被截掉的那一边渐隐。
+                            HStack(spacing: 0) {
+                                LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                                    .frame(width: offset > 0.5 ? 16 : 0)
+                                Color.black
+                                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                                    .frame(width: offset < overflow - 0.5 ? 24 : 0)
+                            }
                         }
+                }
+            }
+            .clipped()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { boxWidth = $0 }
+            .onAppear { motion.reset(hold: 0.6) }
+            .onChange(of: text) { old, new in
+                // 换了一句（不是在原来那句后面接着写）：从头开始。
+                if !new.hasPrefix(old) { motion.reset(hold: 0.6) }
+            }
+    }
+}
+
+/// 点开思考：从底部弹出全文。左上角 ✕ 或下拉收起。
+private struct ThinkingDetailSheet: View {
+    let item: ThinkingItem
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 标题居中，✕ 贴左（圆形玻璃底，和输入框上的按钮一套）。
+            Text(title)
+                .font(.headline)
+                .lineLimit(1)
+                .padding(.horizontal, 72)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .overlay(alignment: .leading) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 44, height: 44)
+                            .contentShape(.circle)
                     }
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 6)
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .accessibilityLabel("关闭")
+                    .padding(.leading, 16)
                 }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { metrics.bodyHeight = $0 }
-                .capped(at: cap)
-                // 展开后点正文也能收起（长按仍是选中文本）。
-                .contentShape(.rect)
-                .onTapGesture { collapse() }
-            }
-        }
-        .onChange(of: streaming) { wasStreaming, isStreaming in
-            // 思考结束时自动收起。
-            if wasStreaming, !isStreaming { ui.set(key, false) }
-        }
-    }
-
-    /// 卷帘往下展开：先以 0 高度插进来，再把限高缓动到一屏，展开完撤掉限高（多出来的在屏幕外）。
-    private func expand() {
-        withAnimation(.disclosure) { arrowOpen = true }
-        withoutAnimation {
-            cap = 0
-            ui.set(key, true)
-        }
-        DispatchQueue.main.async {
-            withAnimation(Self.roll) {
-                cap = min(metrics.bodyHeight, metrics.viewport)
-            } completion: {
-                withoutAnimation {
-                    cap = nil
-                    arrowOpen = nil
+                .padding(.top, 20)
+                .padding(.bottom, 12)
+            ScrollView {
+                // 长思考动辄上万字：按段拆开、懒加载，只排屏幕上看得到的那几段。每段各自可长按选择。
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(Self.paragraphs(item.text).enumerated()), id: \.offset) { _, paragraph in
+                        SelectableText(content: .plain(paragraph, tone: .body, lineSpacing: 4))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 32)
             }
-        }
-    }
-
-    /// 卷帘往上收。读到中段（标题已滚出屏幕）时先把标题平滑滚回来，让人看清回到了哪里，再收。
-    private func collapse() {
-        withAnimation(.disclosure) { arrowOpen = false }
-        if metrics.headerMinY < 110 {
-            withAnimation(.easeInOut(duration: Self.rewindSeconds)) {
-                reveal(headerID, Self.revealAnchor)
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.rewindSeconds) { rollUp() }
-        } else {
-            rollUp()
-        }
-    }
-
-    private func rollUp() {
-        // 先把限高收到一屏：超出部分本来就在屏幕外，看不出变化，卷帘的速度才看得清。
-        withoutAnimation { cap = min(metrics.bodyHeight, metrics.viewport) }
-        DispatchQueue.main.async {
-            withAnimation(Self.roll) {
-                cap = 0
-            } completion: {
-                withoutAnimation {
-                    ui.set(key, false)
-                    cap = nil
-                    arrowOpen = nil
+            .contentShape(.rect)
+            // 点空白处取消选择（点在选中的字上不算，见 `SelectableTextView.ownsTap`）。
+            .simultaneousGesture(
+                SpatialTapGesture(coordinateSpace: .global).onEnded { tap in
+                    guard !SelectableTextView.ownsTap(atGlobal: tap.location) else { return }
+                    UIApplication.shared.sendAction(
+                        #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
+                    )
                 }
-            }
+            )
         }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        // 不透明底：半屏时默认是玻璃，底下的对话透上来，读长文费劲。
+        .presentationBackground(Color(.systemBackground))
     }
 
-    private func withoutAnimation(_ change: () -> Void) {
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction, change)
+    /// 「思考了 4秒」「思考了 1分20秒」。
+    private var title: String {
+        item.durationMs.flatMap(ThinkingBlockView.duration).map { "思考了 \($0)" } ?? "思考过程"
     }
 
     /// 按空行分段（段内换行保留）。
@@ -819,38 +953,6 @@ struct ThinkingBlockView: View {
         text.components(separatedBy: "\n\n")
             .map { $0.trimmingCharacters(in: .newlines) }
             .filter { !$0.isEmpty }
-    }
-}
-
-private extension View {
-    /// 卷帘：内容按自己的完整高度排，对外只报 `cap` 那么高、多出的裁掉；nil = 不限。
-    /// 不用 `.frame(height:)`：那会把限高当成建议尺寸传给内容，长文本会被压扁重排。
-    func capped(at cap: CGFloat?) -> some View {
-        CappedHeightLayout(cap: cap ?? .infinity) { self }
-            .clipped()
-    }
-}
-
-private struct CappedHeightLayout: Layout {
-    var cap: CGFloat
-
-    var animatableData: CGFloat {
-        get { cap }
-        set { cap = newValue }
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let child = subviews.first else { return .zero }
-        let size = child.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
-        return CGSize(width: proposal.width ?? size.width, height: min(size.height, max(cap, 0)))
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        subviews.first?.place(
-            at: bounds.origin,
-            anchor: .topLeading,
-            proposal: ProposedViewSize(width: bounds.width, height: nil)
-        )
     }
 }
 

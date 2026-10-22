@@ -4,7 +4,7 @@
 用法：python3 scripts/make_header.py [输出目录] [--still-only] [--fps 60]
 默认输出到 marketing/header/。
 
-画面：纯色深底，「Moon」（蓝）「Code」（白）。一个 Kimi 蓝小球从画面上方落下，
+画面：纯色深底，「Moon」（蓝）「 Code」（白）。一个 Kimi 蓝小球从画面上方落下，
 砸在「Moon」的第一个 o 上：文字被压得下沉，离撞击点越远的字母下沉越少、越晚（果冻一样的波），
 小球被弹回上方飞出画面，文字再抖几下回到原位，静止片刻后循环。
 
@@ -78,7 +78,7 @@ class Motion:
 class Scene:
     def __init__(self, w, h):
         self.w, self.h = w, h
-        b, a = "Moon", "Code"  # b：会动的蓝字在前；a：静止的白字在后
+        b, a = "Moon", " Code"  # b：会动的蓝字在前；a：静止的白字在后（带空格，与 App 里的「Moon Code」一致）
         size = round(h * 0.2)
         f = sf(size)
         while f.getlength(a + b) > h * 1.15:

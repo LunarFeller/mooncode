@@ -8,7 +8,7 @@ import SwiftUI
 ///        Session2
 ///   📁 Folder2                        (+)
 ///   ╭ (头像) 昵称 >            [退出登录] ╮   ← 悬浮胶囊卡片，和输入框同一种玻璃
-///   ║  💻 MacBook-Pro        ✓           ║   ← 点昵称展开设备面板：切换 / 刷新
+///   ║  💻 MacBook-Pro        ✓           ║   ← 点整条（退出除外）展开设备面板：切换后自动收起 / 刷新
 ///   ╰────────────────────────────────────╯
 
 struct SidebarView: View {
@@ -95,11 +95,10 @@ struct SidebarView: View {
     }
 
     /// 悬浮的胶囊卡片（参考输入框：同一种玻璃，列表从它下面滚过去）。
-    /// 点昵称展开/收起设备面板：在线设备可切换、离线置灰，底部有刷新。
+    /// 点整条（退出按钮除外）展开/收起设备面板：在线设备可切换、离线置灰，底部有刷新。
     private var accountCard: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Avatar(url: app.user?.avatarURL)
                 Button {
                     withAnimation(.snappy) {
                         showsDevices.toggle()
@@ -107,21 +106,28 @@ struct SidebarView: View {
                     // 每次展开顺手拉一次最新状态。
                     if showsDevices { Task { await app.refreshDevices() } }
                 } label: {
-                    HStack(spacing: 4) {
-                        Text(accountTitle)
-                            .font(.body.weight(.semibold))
-                            .lineLimit(1)
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .rotationEffect(.degrees(showsDevices ? 90 : 0))
+                    HStack(spacing: 12) {
+                        Avatar(url: app.user?.avatarURL)
+                        HStack(spacing: 4) {
+                            Text(accountTitle)
+                                .font(.body.weight(.semibold))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .rotationEffect(.degrees(showsDevices ? 90 : 0))
+                        }
+                        Spacer(minLength: 8)
                     }
+                    // 上下留白也算在点击范围里，行高与退出按钮对齐。
+                    .frame(minHeight: 38)
+                    .padding(.leading, 10)
+                    .padding(.vertical, 8)
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("设备")
                 .accessibilityHint(showsDevices ? "收起设备面板" : "展开设备面板")
-                Spacer(minLength: 8)
                 Button {
                     isConfirmingSignOut = true
                 } label: {
@@ -134,9 +140,7 @@ struct SidebarView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(app.isDemoMode ? "退出体验" : "退出登录")
             }
-            .padding(.leading, 10)
             .padding(.trailing, 8)
-            .padding(.vertical, 8)
 
             if showsDevices {
                 devicePanel
@@ -155,6 +159,8 @@ struct SidebarView: View {
 
             ForEach(app.devices) { device in
                 Button {
+                    // 选完（包括点当前这台）就收起面板。
+                    withAnimation(.snappy) { showsDevices = false }
                     Task { await app.select(device) }
                 } label: {
                     HStack(spacing: 10) {

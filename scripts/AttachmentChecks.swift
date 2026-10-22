@@ -47,9 +47,34 @@ private actor AttachmentCheckClient: KapServicing {
     func addWorkspace(root: String) async throws -> Workspace { try await base.addWorkspace(root: root) }
     func browseFs(_ path: String) async throws -> FsBrowse { try await base.browseFs(path) }
     func fsHome() async throws -> FsHome { try await base.fsHome() }
+    func listFiles(_ sessionID: String, path: String) async throws -> FsList {
+        try await base.listFiles(sessionID, path: path)
+    }
+    func readFile(_ sessionID: String, path: String) async throws -> FsContent {
+        try await base.readFile(sessionID, path: path)
+    }
+    func downloadFile(_ sessionID: String, path: String) async throws -> URL {
+        try await base.downloadFile(sessionID, path: path)
+    }
     func sessions(pageSize: Int) async throws -> SessionList { try await base.sessions(pageSize: pageSize) }
     func models() async throws -> [ModelInfo] { try await base.models() }
     func configDefaults() async throws -> ServerConfigDefaults { try await base.configDefaults() }
+    func updateConfig(_ patch: ServerConfigPatch) async throws -> ServerConfigDefaults {
+        try await base.updateConfig(patch)
+    }
+    func providers() async throws -> [ProviderItem] { try await base.providers() }
+    func provider(_ id: String) async throws -> ProviderItem { try await base.provider(id) }
+    func configModels() async throws -> [ConfigModelEntry] { try await base.configModels() }
+    func createProvider(_ body: ProviderWriteBody) async throws { try await base.createProvider(body) }
+    func replaceProvider(_ id: String, body: ProviderWriteBody) async throws {
+        try await base.replaceProvider(id, body: body)
+    }
+    func deleteProvider(_ id: String) async throws { try await base.deleteProvider(id) }
+    func refreshProvider(_ id: String) async throws { try await base.refreshProvider(id) }
+    func catalogProviders() async throws -> [CatalogProvider] { try await base.catalogProviders() }
+    func importCatalogProvider(catalogID: String, id: String?, apiKey: String, baseURL: String?) async throws {
+        try await base.importCatalogProvider(catalogID: catalogID, id: id, apiKey: apiKey, baseURL: baseURL)
+    }
     func usage() async throws -> PlanUsage { try await base.usage() }
     func userInfo() async throws -> KimiUser? { try await base.userInfo() }
     func status(_ id: String) async throws -> SessionRuntimeStatus { try await base.status(id) }
@@ -211,6 +236,47 @@ struct AttachmentChecks {
         await raceChat.send("")
         precondition(raceChat.optimisticPrompts.isEmpty)
 
+        // Upstream file mentions coexist with uploaded images and survive failed-prompt retries.
+        let mentionClient = AttachmentCheckClient()
+        await mentionClient.failPromptOnce()
+        let mentionSession = try await mentionClient.createSession(in: workspace, agentConfig: config.patch)
+        let mentionChat = makeChat(mentionClient, session: mentionSession)
+        defer { mentionChat.stop() }
+        let mentionedFile = FsEntry(path: "docs/notes.md", name: "notes.md")
+        mentionChat.addMention(mentionedFile)
+        mentionChat.addMention(mentionedFile)
+        mentionChat.attachments.append(image)
+        await mentionChat.send("inspect together")
+        let failedMention = mentionChat.optimisticPrompts.first!
+        precondition(failedMention.failed && failedMention.attachments.count == 1)
+        let splitMention = ConversationBuilder.splitMentions(failedMention.text)
+        precondition(splitMention.text == "inspect together" && splitMention.mentions.count == 1)
+        precondition(splitMention.mentions[0].previewEntry?.path == mentionedFile.path)
+        precondition(splitMention.mentions[0].source == nil)
+        mentionChat.attachments = [nextDraft]
+        await mentionClient.echoBeforeResponse { await mentionChat.reload() }
+        await mentionChat.retry(failedMention)
+        let mentionUploads = await mentionClient.uploads
+        let mentionPrompts = await mentionClient.prompts
+        precondition(mentionUploads.count == 2 && mentionUploads.allSatisfy { $0.mediaType == "image/jpeg" })
+        precondition(mentionPrompts.count == 2)
+        precondition(mentionPrompts[0].content.count == 2 && mentionPrompts[1].content.count == 2)
+        precondition(mentionChat.attachments.map(\.id) == [nextDraft.id])
+        precondition(mentionChat.optimisticPrompts.isEmpty, "Mention and image echo must acknowledge by receipt")
+        let mentionUsers = mentionChat.entries.compactMap { entry -> UserEntry? in
+            if case let .user(user) = entry.kind { return user }
+            return nil
+        }
+        precondition(mentionUsers.count == 1 && mentionUsers[0].text == "inspect together")
+        precondition(mentionUsers[0].attachments.count == 2)
+        precondition(mentionUsers[0].attachments[0].previewEntry?.path == mentionedFile.path)
+        precondition(mentionUsers[0].attachments[1].isImage && mentionUsers[0].attachments[1].source != nil)
+        precondition(Set(mentionUsers[0].attachments.map(\.id)).count == 2)
+        let repeatedMentions = ConversationBuilder.splitMentions("[notes](docs/notes.md) [notes](docs/notes.md)").mentions
+        precondition(Set(repeatedMentions.map(\.id)).count == 2)
+        let folderMention = ConversationBuilder.splitMentions("[docs](docs/)").mentions.first!
+        precondition(folderMention.previewEntry == nil)
+
         let mediaSource = AttachmentSource(.object(["kind": .string("session_media"), "fileId": .string("f_photo")]))
         precondition(mediaSource == .sessionMedia("f_photo"))
         let inline = try await realClient.attachmentData(.url(URL(string: "data:image/png;base64,AQID")!), sessionID: "test")
@@ -219,6 +285,6 @@ struct AttachmentChecks {
             _ = try await realClient.attachmentData(.url(URL(string: "file:///tmp/not-an-image")!), sessionID: "test")
             preconditionFailure("Local file URL must not be loaded from a transcript")
         } catch {}
-        print("PASS: image uploads, bounded JSON, retry preservation, image-only receipt reconciliation, repeated text, echo-before-response, preview sources and unique attachment identities")
+        print("PASS: image uploads, bounded JSON, retry preservation, image-only receipt reconciliation, repeated text, echo-before-response, preview sources, unique attachment identities and upstream file mentions")
     }
 }

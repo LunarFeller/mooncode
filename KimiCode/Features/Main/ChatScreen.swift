@@ -7,6 +7,15 @@ struct ChatScreen: View {
     @Environment(AppModel.self) private var app
     @State private var isAddingWorkspace = false
     @State private var confirmedEmptyDeviceID: String?
+    /// 加载中的小脸与对话页欢迎语里的小脸是同一个：数据到了就从这里滑到对话页的位置。
+    @Namespace private var face
+    @State private var isBootFaceShown = false
+
+    /// 还在拉设备 / 设备数据：中间只放 Kimi 小脸，其他界面等数据到了再出来。
+    private var isBooting: Bool {
+        if !app.hasLoadedDevices || app.isLoadingDevices { return true }
+        return !app.onlineDevices.isEmpty && app.chat == nil && confirmedEmptyDeviceID == nil
+    }
 
     private var emptyWorkspaceDeviceID: String? {
         guard app.hasLoadedDevices, !app.isLoadingDevices,
@@ -18,12 +27,14 @@ struct ChatScreen: View {
     var body: some View {
         Group {
             if let chat = app.chat {
-                ChatContent(chat: chat)
+                ChatContent(chat: chat, face: face)
                     .id(chat.sessionID ?? "draft:\(chat.workspace?.id ?? "")")
+                    .transition(.opacity)
             } else {
                 placeholder
             }
         }
+        .animation(.smooth(duration: 0.5), value: app.chat == nil)
         // 顶部不显示会话标题。
         .navigationBarTitleDisplayMode(.inline)
         .task(id: emptyWorkspaceDeviceID) {
@@ -47,9 +58,16 @@ struct ChatScreen: View {
                     Label("打开侧栏", systemImage: "line.3.horizontal")
                 }
             }
-            if app.chat != nil {
-                ToolbarItem(placement: .topBarTrailing) {
-                    SessionInfoButton(chat: app.chat)
+            if let chat = app.chat {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    SessionInfoButton(chat: chat)
+                    FilesButton(
+                        client: app.client,
+                        sessionID: chat.sessionID ?? chat.workspace.flatMap { app.sessions(in: $0).first?.id },
+                        title: chat.workspace?.displayName ?? "文件"
+                    ) { entry in
+                        chat.addMention(entry)
+                    }
                 }
             }
         }
@@ -57,8 +75,16 @@ struct ChatScreen: View {
 
     @ViewBuilder
     private var placeholder: some View {
-        if !app.hasLoadedDevices || app.isLoadingDevices {
-            ProgressView()
+        if isBooting {
+            // 欢迎语的位置先空着；底部让出大约一个输入框的高度，小脸和对话页里的落点基本一致。
+            WelcomeHero(face: face) { Text(verbatim: " ") }
+                .safeAreaPadding(.bottom, 96)
+                .scaleEffect(isBootFaceShown ? 1 : 0.6)
+                .opacity(isBootFaceShown ? 1 : 0)
+                .onAppear {
+                    withAnimation(.spring(duration: 0.6, bounce: 0.3)) { isBootFaceShown = true }
+                }
+                .allowsHitTesting(false)
         } else if app.onlineDevices.isEmpty {
             ContentUnavailableView {
                 Label("没有在线的设备", systemImage: "laptopcomputer.slash")
@@ -97,13 +123,18 @@ struct ChatScreen: View {
 
 /// 空白对话中间的欢迎：会动的 Kimi 小脸 + 一句话。
 struct WelcomeHero<Message: View>: View {
+    /// 传入时小脸和加载中的那个做位置衔接。
+    var face: Namespace.ID? = nil
     @ViewBuilder var message: Message
+
+    @Namespace private var ownFace
 
     var body: some View {
         VStack(spacing: 28) {
             KimiFace(animating: true)
                 .scaleEffect(3)
                 .frame(width: 72, height: 48)
+                .matchedGeometryEffect(id: "kimiFace", in: face ?? ownFace)
             message
                 .font(.title2.weight(.bold))
                 .multilineTextAlignment(.center)
@@ -119,13 +150,30 @@ struct WelcomeHero<Message: View>: View {
 /// 一条对话的正文 + composer。
 private struct ChatContent: View {
     let chat: ChatModel
+    let face: Namespace.ID
 
+    @Environment(AppModel.self) private var app
     @State private var draft = ""
+    /// 点了对话里的文件提及，正在预览的文件。
+    @State private var previewingFile: FsEntry?
     @State private var ui = TranscriptUIState()
     @State private var undoTarget: UserEntry?
     /// 停在底部时新内容自动跟随（官方 isFollowing）；往上翻了就不打扰。
     @State private var isFollowing = true
+    /// 首屏历史到了才显示正文，并且只淡入透明度：布局先一次排好，文字不会跟着滑。
+    @State private var isRevealed: Bool
     @State private var scrollPosition = ScrollPosition(edge: .bottom)
+
+    init(chat: ChatModel, face: Namespace.ID) {
+        self.chat = chat
+        self.face = face
+        _isRevealed = State(initialValue: !Self.isAwaitingHistory(chat))
+    }
+
+    /// 已有会话、正文还是空的：首屏历史还没到（ChatModel 刚建好时 isLoading 还没置上，不能靠它）。
+    private static func isAwaitingHistory(_ chat: ChatModel) -> Bool {
+        !chat.isDraft && chat.entries.isEmpty && chat.optimisticPrompts.isEmpty
+    }
 
     var body: some View {
         Group {
@@ -133,24 +181,23 @@ private struct ChatContent: View {
                 // 不用 LazyVStack：高度差异大时它估不准，滚到底会落在空白里。
                 // 一页只有 30 轮、折叠的部分本来就不渲染，普通 VStack 足够。
                 VStack(alignment: .leading, spacing: 0) {
-                    if chat.isLoading {
-                        ProgressView().frame(maxWidth: .infinity).padding(.bottom, 16)
+                    if chat.isLoading, chat.entries.isEmpty {
+                        ChatSkeleton()
                     }
 
                     ConversationList(chat: chat, ui: ui) { entry in
                         undoTarget = entry
                     }
+                    .opacity(isRevealed ? 1 : 0)
                 }
                 .padding(.horizontal)
                 .padding(.top, 12)
                 .padding(.bottom, 24)
-                // 走 ScrollPosition 而不是 ScrollViewReader：后者的跳转不吃 withAnimation，会一帧闪过去。
-                .environment(\.revealInTranscript) { id, anchor in scrollPosition.scrollTo(id: id, anchor: anchor) }
             }
             .overlay {
                 // 新对话还没发任何东西：中间放欢迎语。
                 if chat.isDraft, chat.entries.isEmpty, chat.optimisticPrompts.isEmpty {
-                    WelcomeHero {
+                    WelcomeHero(face: face) {
                         Text("你来啦，在\(chat.workspace?.displayName ?? "这里")里开始创造吧")
                     }
                     .allowsHitTesting(false)
@@ -171,16 +218,19 @@ private struct ChatContent: View {
                     // 手指一放上去就停止跟随：回答生成中也能往上翻，不会被新内容拽回底部。
                     isFollowing = false
                 case .idle:
-                    // 滑完停在底部附近才恢复跟随。visibleRect 已经算上了底部 composer 的 inset。
+                    // 滑完停在底部附近才恢复跟随。visibleRect 是整个视口、含 composer 盖住的那截，
+                    // 贴底时 maxY = 内容高 + 底部 inset；不减掉 inset，往上翻 200 多点松手也会被拽回去。
                     let geometry = context.geometry
-                    isFollowing = geometry.visibleRect.maxY >= geometry.contentSize.height - 80
+                    let bottom = geometry.contentSize.height + geometry.contentInsets.bottom
+                    isFollowing = geometry.visibleRect.maxY >= bottom - 80
                 default:
                     break
                 }
             }
             .contentShape(.rect)
             .simultaneousGesture(
-                TapGesture().onEnded {
+                SpatialTapGesture(coordinateSpace: .global).onEnded { tap in
+                    guard !SelectableTextView.ownsTap(atGlobal: tap.location) else { return }
                     UIApplication.shared.sendAction(
                         #selector(UIResponder.resignFirstResponder),
                         to: nil, from: nil, for: nil
@@ -188,9 +238,18 @@ private struct ChatContent: View {
                 }
             )
             .onChange(of: chat.contentVersion) { if isFollowing { scrollToBottom(animated: false) } }
+            .onChange(of: Self.isAwaitingHistory(chat)) { _, waiting in
+                guard !waiting, !isRevealed else { return }
+                withAnimation(.easeOut(duration: 0.3)) { isRevealed = true }
+            }
             // 一轮结束时「工作中」那行换成页脚，高度会变，再贴一次底。
             .onChange(of: chat.isWorking) { if isFollowing { scrollToBottom() } }
-            .onChange(of: chat.optimisticPrompts.count) { scrollToBottom() }
+            .onChange(of: chat.optimisticPrompts.count) { old, new in
+                // 自己刚发出一条：不管停在哪都回到底部看它。
+                guard new > old else { return }
+                isFollowing = true
+                scrollToBottom()
+            }
         }
         // 用 safeAreaBar 而不是 safeAreaInset：只有前者参与 iOS 26 的滚动边缘效果，
         // 正文滚到 composer 后面时会像导航栏那样渐隐模糊。
@@ -248,6 +307,25 @@ private struct ChatContent: View {
             chat.restoredDraft = nil
         }
         .refreshable { await chat.reload() }
+        .environment(\.addToComposer) { text in
+            draft += text + " "
+        }
+        .environment(\.openFilePreview) { entry in
+            if fileSessionID != nil { previewingFile = entry }
+        }
+        .sheet(item: $previewingFile) { entry in
+            if let client = app.client, let sessionID = fileSessionID {
+                FilePreviewSheet(client: client, sessionID: sessionID, entry: entry)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+        }
+    }
+
+    /// 读文件用的会话：和右上角 📁 一样，草稿借同文件夹里最近的会话。没有客户端或会话就是 nil。
+    private var fileSessionID: String? {
+        guard app.client != nil else { return nil }
+        return chat.sessionID ?? chat.workspace.flatMap { app.sessions(in: $0).first?.id }
     }
 
     private var isAwaitingInteraction: Bool {
@@ -258,6 +336,8 @@ private struct ChatContent: View {
     /// 所以下一轮主线程滚一次，布局稳定后（约 0.15s）再补一次。
     private func scrollToBottom(animated: Bool = true) {
         let scroll = {
+            // 排队的这一下执行前手指可能已经放上来了，别把正在往上翻的人拽回去。
+            guard isFollowing else { return }
             if animated {
                 withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) }
             } else {
@@ -269,5 +349,46 @@ private struct ChatContent: View {
             guard isFollowing else { return }
             scrollPosition.scrollTo(edge: .bottom)
         }
+    }
+}
+
+/// 打开已有会话首屏加载时的骨架屏：一条右对齐的用户气泡 + 几行助手正文，灰色占位条轻轻呼吸。
+private struct ChatSkeleton: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // 用户气泡（胶囊）。
+            SkeletonBar(height: 36)
+                .containerRelativeFrame(.horizontal) { width, _ in min(width * 0.275, 110) }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.vertical, 10)
+            // 助手正文三行。
+            VStack(alignment: .leading, spacing: 12) {
+                SkeletonBar(height: 15, fill: Color(.systemGray6))
+                SkeletonBar(height: 15, fill: Color(.systemGray6))
+                    .containerRelativeFrame(.horizontal) { width, _ in width * 0.8 }
+                SkeletonBar(height: 15, fill: Color(.systemGray6))
+                    .containerRelativeFrame(.horizontal) { width, _ in width * 0.45 }
+            }
+            .padding(.vertical, 10)
+        }
+        .phaseAnimator([1.0, 0.45]) { content, opacity in
+            content.opacity(opacity)
+        } animation: { _ in
+            .easeInOut(duration: 0.8)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// 一根灰色圆角占位条，默认铺满给它的宽度。
+private struct SkeletonBar: View {
+    var height: CGFloat
+    var fill: Color = Color(.systemGray5)
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: height / 2, style: .continuous)
+            .fill(fill)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
     }
 }
