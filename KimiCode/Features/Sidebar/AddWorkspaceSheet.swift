@@ -58,7 +58,7 @@ struct AddWorkspaceSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
+                    SheetCloseButton()
                 }
             }
         }

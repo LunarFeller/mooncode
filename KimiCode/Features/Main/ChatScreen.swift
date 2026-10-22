@@ -349,7 +349,7 @@ private struct ChatSkeleton: View {
         VStack(alignment: .leading, spacing: 0) {
             // 用户气泡（胶囊）。
             SkeletonBar(height: 36)
-                .containerRelativeFrame(.horizontal) { width, _ in min(width * 0.55, 220) }
+                .containerRelativeFrame(.horizontal) { width, _ in min(width * 0.275, 110) }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.vertical, 10)
             // 助手正文三行。
