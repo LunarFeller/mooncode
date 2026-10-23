@@ -320,11 +320,7 @@ private struct FlowAttachments: View {
         VStack(alignment: .leading, spacing: 6) {
             let images = attachments.filter(\.isImage)
             if !images.isEmpty {
-                AttachmentThumbnailLayout {
-                    ForEach(Array(images.enumerated()), id: \.element.id) { index, attachment in
-                        RemoteAttachmentImage(attachment: attachment, number: index + 1, load: load)
-                    }
-                }
+                RemoteAttachmentImages(attachments: images, load: load)
             }
             ForEach(attachments.filter { !$0.isImage }) { attachment in
                 // 文件提及点一下打开预览。
